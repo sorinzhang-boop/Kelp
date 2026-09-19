@@ -117,7 +117,7 @@ if __name__=='__main__':
         test_dataset_dir=test_dataset_dir,
         model_name=model_name,
         idx_layer=idx_layer,
-        max_length=4096,
+        max_length=TRAIN_CONFIG["max_length"],
         batch_size=1,
         num_workers=2,
         bf16=True
