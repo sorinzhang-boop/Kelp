@@ -8,14 +8,17 @@ from models import StreamingSafetyHead
 from dataset import SafetyDataset
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer, AutoConfig
-
+from config import ACTIVE_MODEL, MODEL_CONFIGS, TRAIN_CONFIG
 
 def evaluate_safety_head(
     ckpt_path,
     test_dataset_dir,
-    model_name="Qwen/Qwen3-8B",
-    idx_layer=20,
-    max_length=4096,
+    # model_name="Qwen/Qwen3-8B",
+    # idx_layer=20,
+    # max_length=4096,
+    model_name=MODEL_CONFIGS[ACTIVE_MODEL]["model_name"],
+    idx_layer=MODEL_CONFIGS[ACTIVE_MODEL]["idx_layer"],
+    max_length=TRAIN_CONFIG["max_length"],
     batch_size=1,
     num_workers=2,
     bf16=True,
@@ -102,10 +105,12 @@ def evaluate_safety_head(
 
 
 if __name__=='__main__':
-    model_name = "Qwen/Qwen3-8B"
+    #model_name = "Qwen/Qwen3-8B"
+    model_name = MODEL_CONFIGS[ACTIVE_MODEL]["model_name"]
     ckpt_path = "ckpts/Qwen-Qwen3-8B/seval.pt"
     test_dataset_dir = "data/s_eval/qwen3_8b/testset/"
-    idx_layer = 21
+    #idx_layer = 21
+    idx_layer = MODEL_CONFIGS[ACTIVE_MODEL]["idx_layer"]
 
     predictions, references = evaluate_safety_head(
         ckpt_path=ckpt_path,

@@ -13,6 +13,8 @@ import random
 import numpy as np
 import tempfile
 
+from config import ACTIVE_MODEL, MODEL_CONFIGS, TRAIN_CONFIG
+
 def find_sequence(lst, seq):
     n = len(seq)
     for i in range(len(lst) - n + 1):
@@ -34,8 +36,10 @@ class SafetyDataset(Dataset):
         model_name,
         tokenizer=None,
         base_model=None,
-        idx_layer: int = 20,
-        max_length: int = 4096,
+        #idx_layer: int = 20,
+        #max_length: int = 4096,
+        idx_layer: int = MODEL_CONFIGS[ACTIVE_MODEL]["idx_layer"],
+        max_length: int = TRAIN_CONFIG["max_length"],
         device: str = "cpu",
         build_cache_if_missing: bool = False,
         overwrite: bool = False,
@@ -51,7 +55,8 @@ class SafetyDataset(Dataset):
         # self.user_prompt_marker = [151645, 198, 151644, 77091, 198]
         self.assistant_tokens = '<|im_start|>assistant\n'
         self.assistant_end = -1
-        self.num_supervised_token = 10
+        #self.num_supervised_token = 10
+        self.num_supervised_token = TRAIN_CONFIG["num_supervised_token"]
         self.cache_dir = os.path.join(
                 dataset_dir,
                 f"safety_cache/{model_name.replace('/', '-')}/idx{idx_layer}_maxlength{max_length}"

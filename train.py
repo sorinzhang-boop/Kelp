@@ -22,6 +22,7 @@ import argparse
 from dataset import SafetyDataset
 from eval import evaluate_safety_head
 
+from config import ACTIVE_MODEL, MODEL_CONFIGS, TRAIN_CONFIG
 
 def set_seed(seed: int):
     random.seed(seed)
@@ -35,7 +36,8 @@ def set_seed(seed: int):
 
     print(f"Random seed set globally to {seed}")
 
-set_seed(42)
+#set_seed(42)
+set_seed(TRAIN_CONFIG["seed"])
 
 
 def count_parameters(model):
@@ -136,7 +138,8 @@ def train(args):
 
     max_steps = -1
     lr_scheduler_type = "cosine"
-    warmup_ratio = 0.05
+    #warmup_ratio = 0.05
+    warmup_ratio = TRAIN_CONFIG["warmup_ratio"]
     warmup_steps = 0
 
     num_update_steps_per_epoch = math.ceil(len(train_loader) / args.gradient_acc_steps)
@@ -245,13 +248,23 @@ def train(args):
     print("Training complete!")
 
 
+    # predictions, references = evaluate_safety_head(
+    #     ckpt_path=ckpt_path,
+    #     test_dataset_dir=args.test_dataset_dir,
+    #     model_name=args.model_name,
+    #     idx_layer=args.idx_layer,
+    #     max_length=4096,
+    #     batch_size=1,
+    #     num_workers=2,
+    #     bf16=True
+    # )
     predictions, references = evaluate_safety_head(
         ckpt_path=ckpt_path,
         test_dataset_dir=args.test_dataset_dir,
         model_name=args.model_name,
         idx_layer=args.idx_layer,
-        max_length=4096,
-        batch_size=1,
+        max_length=args.max_length,
+        batch_size=args.batch_size,
         num_workers=2,
         bf16=True
     )
@@ -265,6 +278,7 @@ def train(args):
 
 
 def main():
+    model_config = MODEL_CONFIGS[ACTIVE_MODEL]
     parser = argparse.ArgumentParser(description="Train the StreamingSafetyHead with your model.")
 
     # --- Model & Path ---
@@ -283,7 +297,8 @@ def main():
     parser.add_argument(
         "--model_name",
         type=str,
-        default="Qwen/Qwen3-8B",
+        #default="Qwen/Qwen3-8B",
+        default=model_config["model_name"],
         help="Path or Hugging Face ID of the base model."
     )
     parser.add_argument(
@@ -297,42 +312,49 @@ def main():
     parser.add_argument(
         "--batch_size",
         type=int,
-        default=1,
+        #default=1,
+        default=TRAIN_CONFIG["batch_size"],
     )
     parser.add_argument(
         "--gradient_acc_steps",
         type=int,
-        default=32,
+        #default=32,
+        default=TRAIN_CONFIG["gradient_acc_steps"],
         help="batch size."
     )
     parser.add_argument(
         "--max_length",
         type=int,
-        default=4096,
+        #default=4096,
+        default=TRAIN_CONFIG["max_length"],
         help="the max sequence length."
     )
     parser.add_argument(
         "--idx_layer",
         type=int,
-        default=32,
+        #default=32,
+        default=model_config["idx_layer"],
         help="Index of the transformer layers to use for feature extraction"
     )
     parser.add_argument(
         "--lr",
         type=float,
-        default=5e-5,
+        #default=5e-5,
+        default=TRAIN_CONFIG["lr"],
         help="learning rate"
     )
     parser.add_argument(
         "--weight_decay",
         type=float,
-        default=0.1,
+        #default=0.1,
+        default=TRAIN_CONFIG["weight_decay"],
         help="weight decay"
     )
     parser.add_argument(
         "--num_train_epochs",
         type=int,
-        default=1,
+        #default=1,
+        default=TRAIN_CONFIG["num_train_epochs"],
         help="nums of training epochs"
     )
 
