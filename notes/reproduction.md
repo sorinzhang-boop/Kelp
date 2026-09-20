@@ -68,3 +68,62 @@ Checkpoint:
 
 - 训练日志显示总计划为 282 个 optimizer update，但实际只执行到 281/282。原因是 9000 不能被 gradient accumulation 32 整除，最后 8 个样本完成了 backward，但未触发 `optimizer.step()`。
 - Response 尾部实现审计：Qwen3 chat template 在 response 结束后还会附加额外 assistant header，因此官方 `eval.py` 的 `pred[-2]` 并非严格意义上的最后正文 token。对现有 checkpoint 进行 readout sweep 后，`pred[-5]` 到 `pred[-1]` 的 Response harmful F1 均为 `0.9087`；Streaming 的不同尾部截断范围 harmful F1 也均为 `0.9069`。因此尾部 token 选择在本次实验中未影响最终指标，后续继续保留作者默认实现。
+
+## Qwen3-8B + WildGuard 复现结果
+
+### 实验配置
+
+同 **Qwen3-8B + S-Eval 复现配置**，仅将数据集替换为 WildGuard。
+
+- Base model: Qwen3-8B
+- Dataset: WildGuard
+- Train / Test: 37934 / 1725
+
+### 复现结果
+
+| Metric | Reproduction | Paper |
+|---|---:|---:|
+| Response-level F1 (label=1) | 0.8495 | 0.8462 |
+| Streaming F1 (label=1) | 0.8199 | 0.8333 |
+
+补充：
+
+- Response accuracy: 0.9513
+- Streaming accuracy: 0.9351
+- Test set: benign 1441，harmful 284
+- `label=1` 对应 harmful。
+- Response-level F1 比论文高 `0.0033`，与论文结果基本一致。
+- Streaming F1 比论文低 `0.0134`。
+- 论文未明确说明 Table 1 的 F1 averaging 方式，目前暂按 harmful 类（label=1）的 F1 与论文结果比较。WildGuard 复现中的 harmful F1 `0.8495` 与论文 `0.8462` 非常接近，而 macro F1 为 `0.9102`，进一步支持当前比较方式。
+
+原始输出：
+
+```text
+-------------Response level--------
+
+               precision    recall  f1-score   support
+
+           0     0.9676    0.9743    0.9710      1441
+           1     0.8650    0.8345    0.8495       284
+
+    accuracy                         0.9513      1725
+   macro avg     0.9163    0.9044    0.9102      1725
+weighted avg     0.9507    0.9513    0.9510      1725
+
+
+-----------Streaming level-----------
+
+               precision    recall  f1-score   support
+
+           0     0.9791    0.9424    0.9604      1441
+           1     0.7544    0.8979    0.8199       284
+
+    accuracy                         0.9351      1725
+   macro avg     0.8668    0.9201    0.8902      1725
+weighted avg     0.9421    0.9351    0.9373      1725
+
+Checkpoint:
+/data1/plugguard_repro/checkpoints/qwen3_8b_wildguard/model_epoch_0.pt
+
+已知问题
+与 S-Eval 相同，当前训练代码仅在累计满 32 个样本时触发 optimizer.step()。WildGuard 训练集有 37934 条样本，37934 = 1185 × 32 + 14，因此计划 optimizer update 数为 1186，但最后 14 个样本完成 backward 后不会触发最后一次 optimizer.step()。
