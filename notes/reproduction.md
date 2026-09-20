@@ -127,3 +127,63 @@ Checkpoint:
 
 已知问题
 与 S-Eval 相同，当前训练代码仅在累计满 32 个样本时触发 optimizer.step()。WildGuard 训练集有 37934 条样本，37934 = 1185 × 32 + 14，因此计划 optimizer update 数为 1186，但最后 14 个样本完成 backward 后不会触发最后一次 optimizer.step()。
+
+## Qwen3-14B + S-Eval 复现结果
+
+### 实验配置
+
+同 **Qwen3-8B + S-Eval 复现配置**，仅将 Base model 替换为 Qwen3-14B。
+
+- Base model: Qwen3-14B
+- Dataset: S-Eval
+- Train / Test: 9000 / 1000
+- Hidden layer: 20
+
+### 复现结果
+
+| Metric | Reproduction | Paper |
+|---|---:|---:|
+| Response-level F1 (label=1) | 0.8668 | — |
+| Streaming F1 (label=1) | 0.8748 | 0.9041 |
+
+补充：
+
+- Response accuracy: 0.8660
+- Streaming accuracy: 0.8700
+- Test set: benign 485，harmful 515
+- `label=1` 对应 harmful。
+- 论文 Table 5 对 Qwen3-14B + S-Eval 报告 Streaming F1 `0.9041`，未单独报告 Response-level F1。
+- Streaming F1 比论文低 `0.0293`。
+- Qwen3-14B 的测试集 harmful 数量为 515，与论文 StreamGuardBench 数据统计一致。
+- 当前继续按 harmful 类（label=1）的 F1 与论文 Streaming F1 进行比较。
+
+原始输出：
+
+```text
+-------------Response level--------
+
+               precision    recall  f1-score   support
+
+           0     0.8448    0.8866    0.8652       485
+           1     0.8880    0.8466    0.8668       515
+
+    accuracy                         0.8660      1000
+   macro avg     0.8664    0.8666    0.8660      1000
+weighted avg     0.8670    0.8660    0.8660      1000
+
+
+-----------Streaming level-----------
+
+               precision    recall  f1-score   support
+
+           0     0.8721    0.8577    0.8649       485
+           1     0.8681    0.8816    0.8748       515
+
+    accuracy                         0.8700      1000
+   macro avg     0.8701    0.8696    0.8698      1000
+weighted avg     0.8700    0.8700    0.8700      1000
+
+Checkpoint:
+/data1/plugguard_repro/checkpoints/qwen3_14b_seval/model_epoch_0.pt
+已知问题
+与 Qwen3-8B + S-Eval 相同，训练集有 9000 条样本，无法被 gradient accumulation 32 整除，因此最后 8 个样本完成 backward 后不会触发最后一次 optimizer.step()。
