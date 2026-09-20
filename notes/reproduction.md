@@ -66,5 +66,5 @@ Checkpoint:
 
 ### 已知问题
 
-训练日志显示总计划为 282 个 optimizer update，但实际只执行到 281/282。
-原因是 9000 不能被 gradient accumulation 32 整除，最后 8 个样本完成了 backward，但未触发 `optimizer.step()`。
+- 训练日志显示总计划为 282 个 optimizer update，但实际只执行到 281/282。原因是 9000 不能被 gradient accumulation 32 整除，最后 8 个样本完成了 backward，但未触发 `optimizer.step()`。
+- Response 尾部实现审计：Qwen3 chat template 在 response 结束后还会附加额外 assistant header，因此官方 `eval.py` 的 `pred[-2]` 并非严格意义上的最后正文 token。对现有 checkpoint 进行 readout sweep 后，`pred[-5]` 到 `pred[-1]` 的 Response harmful F1 均为 `0.9087`；Streaming 的不同尾部截断范围 harmful F1 也均为 `0.9069`。因此尾部 token 选择在本次实验中未影响最终指标，后续继续保留作者默认实现。
