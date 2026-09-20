@@ -233,19 +233,78 @@ assistant
 
 ## 7. 当前复现原则
 
-当前目标是首先复现作者公开实现，因此采用以下原则：
+当前目标是在尽量保持作者公开实现核心行为的前提下，完成可重复、可扩展的 PlugGuard baseline 复现，并逐步覆盖不同数据集和 backbone。
 
-1. 优先保持作者公开代码的实际行为。
-2. 只修复导致程序无法运行的问题。
-3. 不擅自修改模型结构、损失函数和数据处理逻辑。
-4. 对论文和代码之间的不一致进行记录。
-5. 对含义不明确的实现先保留原样。
-6. 后续如果需要修改，应作为单独的消融实验，而不是直接改变 baseline。
+采用以下原则：
 
-目前已经实际修改的内容只有：
+1. **优先保持作者公开实现的算法行为。**  
+   不擅自修改 PlugGuard 的模型结构、SLD 模块、ATC 监督方式、损失函数主体和 Streaming / Response 评测规则。
+
+2. **允许进行不改变算法语义的工程性修改。**  
+   包括修复程序无法启动的问题、集中管理配置、统一模型和训练参数、整理实验路径，以及增加复现实验所需的日志和记录。
+
+3. **论文与代码默认配置冲突时，优先采用论文明确给出的实验配置。**  
+   例如当前正式复现采用：
+   - learning rate = `5e-5`
+   - weight decay = `0`
+   - warmup ratio = `0.05`
+   - epoch = `1`
+   - batch size = `1`
+   - gradient accumulation = `32`
+   - max length = `4096`
+   - ATC supervised tokens = `10`
+   - seed = `42`
+
+4. **模型相关配置统一放入 `config.py`。**  
+   当前通过 `ACTIVE_MODEL` 和 `MODEL_CONFIGS` 管理不同 backbone 的：
+   - Hugging Face model name
+   - hidden layer index
+
+   已支持：
+   - Qwen3-8B
+   - Qwen3-14B
+
+   当前两者均按照论文的 layer-selection heuristic 使用 `idx_layer = 20`。
+
+5. **不同实验的数据、cache、checkpoint 和 log 必须相互隔离。**  
+   不覆盖已经完成的 baseline 结果。不同 backbone / dataset 分别使用独立目录，以便后续比较和追溯。
+
+6. **对论文与代码之间的不一致进行记录，但 baseline 默认不擅自修正。**  
+   当前已发现并记录的例子包括：
+   - Qwen3 chat template 在完整 response 后额外添加 assistant header
+   - `eval.py` 的 `pred[-2]` 并非严格意义上的 response 最后正文 token
+   - ATC 最后 10 个监督位置可能包含特殊 token
+   - gradient accumulation 无法整除数据集时，最后不足一个 accumulation window 的梯度不会触发 `optimizer.step()`
+
+7. **对于含义不明确的实现，优先通过实验验证其实际影响，而不是直接修改。**  
+   例如已经对 Qwen3-8B + S-Eval 进行了 response readout sweep，确认 `pred[-5]` 到 `pred[-1]` 的 Response F1 完全一致，因此继续保留作者默认 `pred[-2]` 实现。
+
+8. **新的 backbone 在正式实验前优先做最小 smoke test。**  
+   用少量样本确认模型可以加载、目标 hidden layer 可以读取、hidden size 与 PlugGuard head 兼容、assistant boundary 和 labels 长度正常，再启动完整实验。
+
+9. **baseline 与后续修正版 / 消融实验严格区分。**  
+   如果后续需要修改 assistant boundary、训练尾部监督、gradient accumulation 行为、hidden layer 或其他算法相关实现，应作为单独实验，不直接覆盖当前 baseline。
+
+### 当前已经实际修改的内容
+
+相对于作者公开代码，目前主要进行了以下复现工程修改：
 
 ```text
-train.py 增加缺失的 main() 启动入口
-```
+1. train.py
+   - 补充缺失的 main() 启动入口
+   - 从统一配置读取模型和训练参数
+   - 正式复现采用论文给出的 weight decay = 0
+   - 评测阶段使用统一的 max_length / batch_size 等配置
 
-其余发现目前均只记录，不修改。
+2. config.py
+   - 新增统一复现配置
+   - 集中管理训练超参数
+   - 集中管理 Qwen3-8B / Qwen3-14B 的 model_name 和 idx_layer
+
+3. dataset.py
+   - 从 config.py 读取 idx_layer、max_length 和 num_supervised_token
+   - 保留作者原有的数据构造、assistant boundary 和 cache 逻辑
+
+4. eval.py
+   - 从 config.py 读取 model_name、idx_layer 和 max_length
+   - 保留作者原有 Response-level `pred[-2]` 和 Streaming-level `max(pred)` 评测逻辑
