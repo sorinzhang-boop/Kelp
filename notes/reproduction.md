@@ -319,3 +319,161 @@ Checkpoint:
 与 Qwen3 S-Eval 实验相同，训练集有 9000 条样本，无法被 gradient accumulation 32 整除，因此最后 8 个样本完成 backward 后不会触发最后一次 optimizer.step()。
 Llama-3.1-8B 使用其自身 chat template。由于 tokenizer.encode() 默认会附加 BOS token，当前仅对 meta-llama/Llama-3.1-8B-Instruct 的 assistant marker 编码使用 add_special_tokens=False，Qwen 路径保持作者原始行为。
 与 Qwen baseline 一致，继续保留作者默认的 add_generation_prompt=True、assistant_end=-1、Response-level pred[-2] 和 Streaming-level max(pred) 评测逻辑。
+
+## Llama-3.1-8B + WildGuard 复现结果
+
+### 实验配置
+
+同前述 WildGuard baseline 配置，仅将 Base model 替换为 Llama-3.1-8B-Instruct，并对 Llama chat template 的 assistant boundary 做最小适配。
+
+- Base model: Llama-3.1-8B-Instruct
+- Dataset: WildGuard
+- Train / Test: 37934 / 1725
+- Hidden layer: 20
+- Hidden size: 4096
+- Epoch: 1
+- Learning rate: 5e-5
+- Weight decay: 0
+- Batch size: 1
+- Gradient accumulation: 32
+- Seed: 42
+
+论文 Table 6 中，Llama-3.1-8B 对应 WildGuard 的 harmful response 数为：
+
+- Train harmful: 6111
+- Test harmful: 206
+
+本次测试集统计为 benign 1519 / harmful 206，与论文一致。
+
+### 复现结果
+
+| Metric | Reproduction | Paper |
+|---|---:|---:|
+| Response-level F1 (label=1) | 0.7404 | — |
+| Streaming F1 (label=1) | 0.6969 | 0.8115 |
+
+补充：
+
+- Response accuracy: 0.9374
+- Streaming accuracy: 0.9148
+- `label=1` 对应 harmful。
+- 论文 Table 5 对 Llama-3.1-8B + WildGuard 报告 Streaming F1 `0.8115`，未单独报告 Response-level F1。
+- 本次 Streaming F1 比论文低 `0.1146`，是当前各组复现实验中差距最大的一组。
+
+原始输出：
+
+```text
+-------------Response level--------
+
+               precision    recall  f1-score   support
+
+           0     0.9657    0.9631    0.9644      1519
+           1     0.7333    0.7476    0.7404       206
+
+    accuracy                         0.9374      1725
+   macro avg     0.8495    0.8554    0.8524      1725
+weighted avg     0.9379    0.9374    0.9377      1725
+
+
+-----------Streaming level-----------
+
+               precision    recall  f1-score   support
+
+           0     0.9744    0.9276    0.9504      1519
+           1     0.6057    0.8204    0.6969       206
+
+    accuracy                         0.9148      1725
+   macro avg     0.7901    0.8740    0.8237      1725
+weighted avg     0.9304    0.9148    0.9201      1725
+
+Checkpoint:
+/data1/plugguard_repro/checkpoints/llama_3_1_8b_wildguard/model_epoch_0.pt
+实验过程中的兼容问题
+
+首次正式评测时，WildGuard test set 中存在一条极短 response，其 assistant sequence 长度仅为 6，小于默认 num_supervised_token=10，导致原始标签构造逻辑发生 tensor shape mismatch：
+
+RuntimeError: The expanded size of the tensor (6) must match the existing size (10)
+
+检查后确认：
+
+Train cache 已完整构建 37934 条；
+PlugGuard 训练已正常完成；
+checkpoint 已成功保存；
+错误仅发生在训练完成后的 test cache 构建阶段；
+test set 中仅有 1 条 seq_len < 10 的样本，index 为 951，label 为 benign。
+
+因此仅对 Llama 且 seq_len < num_supervised_token 的情况使用：
+
+effective_n = seq_len
+
+其余 Llama 样本和 Qwen 路径均保持原始行为不变。
+
+修复后重新构建完整 test cache，逐条检查结果：
+
+raw samples      : 1725
+cached samples   : 1725
+label mismatches : 0
+short samples    : 1
+
+说明 test cache 完整，且 cache label 与原始数据逐条一致。
+
+Streaming False Positive 诊断
+
+为定位 Streaming F1 明显偏低的原因，对 1519 条 benign test samples 的 token-level prediction 进行了诊断。
+
+结果：
+
+Response FP  : 56
+Streaming FP : 110
+
+Streaming 相比 Response-level 额外产生了较多 false positive。
+
+对 110 条 Streaming false positive 的首次 harmful trigger 位置统计：
+
+Last 3 header tokens : 0
+<|eot_id|>           : 0
+Last body token      : 0
+Earlier body         : 110
+
+因此，本次 Streaming false positive 并非由 response 尾部的 special token 或额外 assistant header 触发，而全部发生在 response 正文较早位置。
+
+按 assistant trajectory 长度统计 benign 样本：
+
+<=50 tokens:
+benign = 489
+FP = 0
+FP rate = 0.0000
+
+51-100 tokens:
+benign = 42
+FP = 0
+FP rate = 0.0000
+
+101-200 tokens:
+benign = 36
+FP = 2
+FP rate = 0.0556
+
+>200 tokens:
+benign = 952
+FP = 108
+FP rate = 0.1134
+
+其中：
+
+110 个 Streaming false positive 中有 108 个来自长度超过 200 token 的 benign response；
+全部 benign response 平均 assistant trajectory 长度约为 370.9；
+Streaming false positive 样本平均长度约为 649.5。
+
+当前诊断表明：
+
+Llama-3.1-8B + WildGuard 的 Streaming F1 明显低于论文，主要表现为长 benign response 正文中的中途 harmful 误触发；该现象不是由尾部 special token、test cache 不完整或 label 错位造成。
+
+当前结论
+Llama-3.1-8B 模型加载、Layer 20 hidden-state extraction、hidden size 4096、assistant boundary 均已验证正常。
+WildGuard train/test 数据规模及 harmful 数与论文一致。
+Train cache 完整，训练正常结束，checkpoint 正常保存。
+Test cache 完整，1725 条 cache label 与原始数据逐条一致。
+短 response 兼容修复只影响 1 条 test sample，不会解释整体 F1 大幅下降。
+当前较大的复现差异集中在 Llama-3.1-8B + WildGuard 的长序列 Streaming false positive。
+暂不进一步修改 baseline 实现，保留该结果及诊断作为复现差异记录。
