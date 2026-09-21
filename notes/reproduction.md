@@ -187,3 +187,65 @@ Checkpoint:
 /data1/plugguard_repro/checkpoints/qwen3_14b_seval/model_epoch_0.pt
 已知问题
 与 Qwen3-8B + S-Eval 相同，训练集有 9000 条样本，无法被 gradient accumulation 32 整除，因此最后 8 个样本完成 backward 后不会触发最后一次 optimizer.step()。
+
+## Qwen3-14B + WildGuard 复现结果
+
+### 实验配置
+
+同 **Qwen3-14B + S-Eval 复现配置**，仅将数据集替换为 WildGuard。
+
+- Base model: Qwen3-14B
+- Dataset: WildGuard
+- Train / Test: 37934 / 1725
+- Hidden layer: 20
+
+### 复现结果
+
+| Metric | Reproduction | Paper |
+|---|---:|---:|
+| Response-level F1 (label=1) | 0.7945 | — |
+| Streaming F1 (label=1) | 0.7770 | 0.7845 |
+
+补充：
+
+- Response accuracy: 0.9391
+- Streaming accuracy: 0.9281
+- Test set: benign 1466，harmful 259
+- `label=1` 对应 harmful。
+- 论文 Table 5 对 Qwen3-14B + WildGuard 报告 Streaming F1 `0.7845`，未单独报告 Response-level F1。
+- Streaming F1 比论文低 `0.0075`。
+- Qwen3-14B WildGuard test 中 harmful 数量为 259，与论文数据统计一致。
+- Streaming 相比 Response-level 将 harmful recall 从 `0.7838` 提高到 `0.8340`，同时 precision 从 `0.8056` 降至 `0.7273`。
+
+原始输出：
+
+```text
+-------------Response level--------
+
+               precision    recall  f1-score   support
+
+           0     0.9620    0.9666    0.9643      1466
+           1     0.8056    0.7838    0.7945       259
+
+    accuracy                         0.9391      1725
+   macro avg     0.8838    0.8752    0.8794      1725
+weighted avg     0.9385    0.9391    0.9388      1725
+
+
+-----------Streaming level-----------
+
+               precision    recall  f1-score   support
+
+           0     0.9699    0.9447    0.9572      1466
+           1     0.7273    0.8340    0.7770       259
+
+    accuracy                         0.9281      1725
+   macro avg     0.8486    0.8894    0.8671      1725
+weighted avg     0.9335    0.9281    0.9301      1725
+
+Checkpoint:
+/data1/plugguard_repro/checkpoints/qwen3_14b_wildguard/model_epoch_0.pt
+已知问题:
+与 Qwen3-8B + WildGuard 相同，当前训练代码仅在累计满 32 个样本时触发 optimizer.step()。
+WildGuard 训练集有 37934 条样本，37934 = 1185 × 32 + 14，因此最后 14 个样本完成 backward 后不会触发最后一次 optimizer.step()。
+继续保留作者默认的 Response-level pred[-2] 和 Streaming-level max(pred) 评测实现。
