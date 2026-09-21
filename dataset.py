@@ -53,7 +53,8 @@ class SafetyDataset(Dataset):
         self.device = device
         
         # self.user_prompt_marker = [151645, 198, 151644, 77091, 198]
-        self.assistant_tokens = '<|im_start|>assistant\n'
+        #self.assistant_tokens = '<|im_start|>assistant\n'
+        self.assistant_tokens = MODEL_CONFIGS[ACTIVE_MODEL]["assistant_tokens"]
         self.assistant_end = -1
         #self.num_supervised_token = 10
         self.num_supervised_token = TRAIN_CONFIG["num_supervised_token"]
@@ -123,8 +124,38 @@ class SafetyDataset(Dataset):
                 # if user_to_assistant_pos < 0:
                 #     continue
                 # assistant_start = user_to_assistant_pos + len(self.user_prompt_marker)
-                assistant_ids = tokenizer.encode(self.assistant_tokens)
-                assistant_start = find_sequence(model_inputs.input_ids[0].tolist(), assistant_ids) + len(assistant_ids)
+                #assistant_ids = tokenizer.encode(self.assistant_tokens)
+                #assistant_start = find_sequence(model_inputs.input_ids[0].tolist(), assistant_ids) + len(assistant_ids)
+                if self.model_name == "meta-llama/Llama-3.1-8B-Instruct":
+                    # Llama tokenizer.encode() 默认会添加 BOS，
+                    # 因此只在 Llama 路径禁用额外 special tokens。
+                    assistant_ids = tokenizer.encode(
+                        self.assistant_tokens,
+                        add_special_tokens=False
+                    )
+
+                    assistant_pos = find_sequence(
+                        model_inputs.input_ids[0].tolist(),
+                        assistant_ids
+                    )
+
+                    if assistant_pos < 0:
+                        raise ValueError(
+                            f"Llama assistant marker not found for model {self.model_name}"
+                        )
+
+                    assistant_start = assistant_pos + len(assistant_ids)
+
+                else:
+                    # 保持作者原始 Qwen 行为，不改变已有 baseline 的处理逻辑。
+                    assistant_ids = tokenizer.encode(self.assistant_tokens)
+                    assistant_start = (
+                        find_sequence(
+                            model_inputs.input_ids[0].tolist(),
+                            assistant_ids
+                        )
+                        + len(assistant_ids)
+                    )
     
                 seq_len = model_inputs.input_ids[:, assistant_start:self.assistant_end].shape[-1]
                 if seq_len <= 0:

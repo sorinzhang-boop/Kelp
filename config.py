@@ -1,4 +1,4 @@
-ACTIVE_MODEL = "qwen3_14b"
+ACTIVE_MODEL = "llama_3_1_8b"
 
 
 MODEL_CONFIGS = {
@@ -10,6 +10,12 @@ MODEL_CONFIGS = {
     "qwen3_14b": {
         "model_name": "Qwen/Qwen3-14B",
         "idx_layer": 20,
+    },
+
+    "llama_3_1_8b": {
+        "model_name": "meta-llama/Llama-3.1-8B-Instruct",
+        "idx_layer": 20,
+        "assistant_tokens": "<|start_header_id|>assistant<|end_header_id|>\n\n",
     },
 }
 
