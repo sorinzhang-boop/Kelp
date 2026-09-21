@@ -54,7 +54,23 @@ class SafetyDataset(Dataset):
         
         # self.user_prompt_marker = [151645, 198, 151644, 77091, 198]
         #self.assistant_tokens = '<|im_start|>assistant\n'
-        self.assistant_tokens = MODEL_CONFIGS[ACTIVE_MODEL]["assistant_tokens"]
+        #self.assistant_tokens = MODEL_CONFIGS[ACTIVE_MODEL]["assistant_tokens"]
+        model_config = next(
+            (
+                config
+                for config in MODEL_CONFIGS.values()
+                if config["model_name"] == self.model_name
+            ),
+            None,
+        )
+
+        if model_config is None:
+            raise ValueError(
+                f"Model {self.model_name} is not configured in MODEL_CONFIGS"
+            )
+
+        self.assistant_tokens = model_config["assistant_tokens"]
+        
         self.assistant_end = -1
         #self.num_supervised_token = 10
         self.num_supervised_token = TRAIN_CONFIG["num_supervised_token"]
