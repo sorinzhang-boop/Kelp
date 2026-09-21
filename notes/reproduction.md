@@ -477,3 +477,53 @@ Test cache 完整，1725 条 cache label 与原始数据逐条一致。
 短 response 兼容修复只影响 1 条 test sample，不会解释整体 F1 大幅下降。
 当前较大的复现差异集中在 Llama-3.1-8B + WildGuard 的长序列 Streaming false positive。
 暂不进一步修改 baseline 实现，保留该结果及诊断作为复现差异记录。
+
+## Figure 3 Cross-model Transfer：Qwen3-14B → Qwen3-8B
+
+### 实验设置
+
+复现 Figure 3 中：
+
+- Source Model: Qwen3-14B
+- Target Model: Qwen3-8B
+- Dataset: S-Eval
+- Hidden layer: 20
+- Target backbone: Qwen3-8B
+- PlugGuard head: 重新训练
+
+论文 Figure 3 的定义是：使用 source model 生成的 query-response pairs 训练 PlugGuard，并在 target model 上进行风险检测。:contentReference[oaicite:0]{index=0}
+
+因此本实验采用：
+
+```text
+Train responses : Qwen3-14B / S-Eval trainset
+Train features  : Qwen3-8B hidden states
+Test responses  : Qwen3-8B / S-Eval testset
+Test features   : Qwen3-8B hidden states
+为支持该实验，对 dataset.py 做了最小修改：assistant marker 不再依赖全局 ACTIVE_MODEL，而是根据实际传入的 model_name 选择对应配置。其余 PlugGuard 训练、损失函数、评测逻辑均保持不变。
+
+复现结果
+Metric	                   Reproduction	   Paper
+Response-level harmful F1	0.9130	         —
+Streaming harmful F1	    0.9139	       0.9161
+原始输出：
+-------------Response level-------- 
+               precision    recall  f1-score   support
+
+           0     0.9030    0.8972    0.9001       467
+           1     0.9104    0.9156    0.9130       533
+
+    accuracy                         0.9070      1000
+   macro avg     0.9067    0.9064    0.9066      1000
+weighted avg     0.9070    0.9070    0.9070      1000
+
+
+-----------Streaming level-----------
+               precision    recall  f1-score   support
+
+           0     0.9229    0.8715    0.8965       467
+           1     0.8927    0.9362    0.9139       533
+
+    accuracy                         0.9060      1000
+   macro avg     0.9078    0.9039    0.9052      1000
+weighted avg     0.9068    0.9060    0.9058      1000
