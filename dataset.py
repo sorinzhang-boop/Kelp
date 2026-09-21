@@ -161,10 +161,30 @@ class SafetyDataset(Dataset):
                 if seq_len <= 0:
                     continue
     
+                #labels = torch.full((1, seq_len), -100, dtype=torch.long, device=self.device)
+                #labels[:, :self.num_supervised_token] = 0
+                #labels[:, -self.num_supervised_token:] = torch.tensor([label], device=self.device).unsqueeze(1).expand(-1, self.num_supervised_token)
+                
                 labels = torch.full((1, seq_len), -100, dtype=torch.long, device=self.device)
-                labels[:, :self.num_supervised_token] = 0
-                labels[:, -self.num_supervised_token:] = torch.tensor([label], device=self.device).unsqueeze(1).expand(-1, self.num_supervised_token)
-    
+                if self.model_name == "meta-llama/Llama-3.1-8B-Instruct" and seq_len < self.num_supervised_token:
+                    effective_n = seq_len
+
+                    labels[:, :effective_n] = 0
+                    labels[:, -effective_n:] = (
+                        torch.tensor([label], device=self.device)
+                        .unsqueeze(1)
+                        .expand(-1, effective_n)
+                    )
+
+                else:
+                    # 保持作者原始行为；Qwen 路径完全不变。
+                    labels[:, :self.num_supervised_token] = 0
+                    labels[:, -self.num_supervised_token:] = (
+                        torch.tensor([label], device=self.device)
+                        .unsqueeze(1)
+                        .expand(-1, self.num_supervised_token)
+                    )
+
                 embedding_cpu = hidden_states[0, :self.assistant_end, :].detach().cpu().contiguous()
                 labels_cpu = labels[0].detach().cpu().contiguous()
     
