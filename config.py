@@ -5,11 +5,13 @@ MODEL_CONFIGS = {
     "qwen3_8b": {
         "model_name": "Qwen/Qwen3-8B",
         "idx_layer": 20,
+        "assistant_tokens": "<|im_start|>assistant\n",
     },
 
     "qwen3_14b": {
         "model_name": "Qwen/Qwen3-14B",
         "idx_layer": 20,
+        "assistant_tokens": "<|im_start|>assistant\n",
     },
 
     "llama_3_1_8b": {
