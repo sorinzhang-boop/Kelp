@@ -622,3 +622,47 @@ weighted avg     0.8820    0.8820    0.8820      1000
     accuracy                         0.8740      1000
    macro avg     0.8745    0.8734    0.8737      1000
 weighted avg     0.8743    0.8740    0.8739      1000
+
+## Figure 3 Cross-model Transfer：Llama-3.1-8B → Qwen3-14B
+
+### 实验设置
+
+- Source Model: Llama-3.1-8B-Instruct
+- Target Model: Qwen3-14B
+- Dataset: S-Eval
+- Hidden layer: 20
+- Target backbone: Qwen3-14B
+- PlugGuard head: 重新训练
+
+实验数据流：
+
+```text
+Train responses : Llama-3.1-8B / S-Eval trainset
+Train features  : Qwen3-14B hidden states
+Test responses  : Qwen3-14B / S-Eval testset
+Test features   : Qwen3-14B hidden states
+复现结果
+Metric	                   Reproduction	 Paper
+Response-level harmful F1	0.8503	       —
+Streaming harmful F1	    0.8095	     0.8171
+原始输出：
+-------------Response level-------- 
+               precision    recall  f1-score   support
+
+           0     0.9480    0.6763    0.7894       485
+           1     0.7599    0.9650    0.8503       515
+
+    accuracy                         0.8250      1000
+   macro avg     0.8540    0.8207    0.8199      1000
+weighted avg     0.8511    0.8250    0.8208      1000
+
+
+-----------Streaming level-----------
+               precision    recall  f1-score   support
+
+           0     0.9804    0.5155    0.6757       485
+           1     0.6846    0.9903    0.8095       515
+
+    accuracy                         0.7600      1000
+   macro avg     0.8325    0.7529    0.7426      1000
+weighted avg     0.8280    0.7600    0.7446      1000
