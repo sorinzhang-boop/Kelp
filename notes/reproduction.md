@@ -492,21 +492,25 @@ Test cache 完整，1725 条 cache label 与原始数据逐条一致。
 - Target backbone: Qwen3-8B
 - PlugGuard head: 重新训练
 
-论文 Figure 3 的定义是：使用 source model 生成的 query-response pairs 训练 PlugGuard，并在 target model 上进行风险检测。:contentReference[oaicite:0]{index=0}
+论文 Figure 3 的定义是：使用 source model 生成的 query-response pairs 训练 PlugGuard，并在 target model 上进行风险检测。
 
 因此本实验采用：
-
 ```text
 Train responses : Qwen3-14B / S-Eval trainset
 Train features  : Qwen3-8B hidden states
 Test responses  : Qwen3-8B / S-Eval testset
 Test features   : Qwen3-8B hidden states
-为支持该实验，对 dataset.py 做了最小修改：assistant marker 不再依赖全局 ACTIVE_MODEL，而是根据实际传入的 model_name 选择对应配置。其余 PlugGuard 训练、损失函数、评测逻辑均保持不变。
 ```
-复现结果
-Metric	                   Reproduction	   Paper
-Response-level harmful F1	0.9130	         —
-Streaming harmful F1	    0.9139	       0.9161
+
+为支持该实验，对 `dataset.py` 做了最小修改：assistant marker 不再依赖全局 `ACTIVE_MODEL`，而是根据实际传入的 `model_name` 选择对应配置。其余 PlugGuard 训练、损失函数、评测逻辑均保持不变。
+
+### 复现结果
+
+| Metric | Reproduction | Paper |
+|---|---:|---:|
+| Response-level harmful F1 | 0.9130 | — |
+| Streaming harmful F1 | 0.9139 | 0.9161 |
+
 原始输出：
 ```text
 -------------Response level-------- 
@@ -552,12 +556,15 @@ Train features  : Qwen3-8B hidden states
 Test responses  : Qwen3-8B / S-Eval testset
 Test features   : Qwen3-8B hidden states
 ```
-复现结果
-Metric	                    Reproduction	Paper
-Response-level harmful F1	0.8952	          —
-Streaming harmful F1	    0.8993	        0.8783
+### 复现结果
+
+| Metric | Reproduction | Paper |
+|---|---:|---:|
+| Response-level harmful F1 | 0.8952 | — |
+| Streaming harmful F1 | 0.8993 | 0.8783 |
 
 原始输出：
+
 ```text
 -------------Response level-------- 
                precision    recall  f1-score   support
@@ -602,11 +609,15 @@ Train features  : Qwen3-14B hidden states
 Test responses  : Qwen3-14B / S-Eval testset
 Test features   : Qwen3-14B hidden states
 ```
-复现结果
-Metric	                    Reproduction	Paper
-Response-level harmful F1	0.8859	         —
-Streaming harmful F1	    0.8795	       0.8827
+### 复现结果
+
+| Metric | Reproduction | Paper |
+|---|---:|---:|
+| Response-level harmful F1 | 0.8859 | — |
+| Streaming harmful F1 | 0.8795 | 0.8827 |
+
 原始输出：
+
 ```text
 -------------Response level-------- 
                precision    recall  f1-score   support
@@ -649,11 +660,15 @@ Train features  : Qwen3-14B hidden states
 Test responses  : Qwen3-14B / S-Eval testset
 Test features   : Qwen3-14B hidden states
 ```
-复现结果
-Metric	                   Reproduction	 Paper
-Response-level harmful F1	0.8503	       —
-Streaming harmful F1	    0.8095	     0.8171
+### 复现结果
+
+| Metric | Reproduction | Paper |
+|---|---:|---:|
+| Response-level harmful F1 | 0.8503 | — |
+| Streaming harmful F1 | 0.8095 | 0.8171 |
+
 原始输出：
+
 ```text
 -------------Response level-------- 
                precision    recall  f1-score   support
@@ -696,11 +711,15 @@ Train features  : Llama-3.1-8B hidden states
 Test responses  : Llama-3.1-8B / S-Eval testset
 Test features   : Llama-3.1-8B hidden states
 ```
-复现结果：
-Metric	                    Reproduction	Paper
-Response-level harmful F1	0.7995	          —
-Streaming harmful F1	    0.8947	        0.8966
+### 复现结果
+
+| Metric | Reproduction | Paper |
+|---|---:|---:|
+| Response-level harmful F1 | 0.7995 | — |
+| Streaming harmful F1 | 0.8947 | 0.8966 |
+
 原始输出：
+
 ```text
 -------------Response level-------- 
                precision    recall  f1-score   support
@@ -743,11 +762,15 @@ Train features  : Llama-3.1-8B hidden states
 Test responses  : Llama-3.1-8B / S-Eval testset
 Test features   : Llama-3.1-8B hidden states
 ```
-复现结果：
-Metric	                    Reproduction	Paper
-Response-level harmful F1	0.7895	         —
-Streaming harmful F1	    0.8966	       0.9046
+### 复现结果
+
+| Metric | Reproduction | Paper |
+|---|---:|---:|
+| Response-level harmful F1 | 0.7895 | — |
+| Streaming harmful F1 | 0.8966 | 0.9046 |
+
 原始输出：
+
 ```text
 -------------Response level-------- 
                precision    recall  f1-score   support
