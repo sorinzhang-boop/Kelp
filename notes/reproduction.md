@@ -418,7 +418,7 @@ short samples    : 1
 说明 test cache 完整，且 cache label 与原始数据逐条一致。
 
 Streaming False Positive 诊断
-
+```text
 为定位 Streaming F1 明显偏低的原因，对 1519 条 benign test samples 的 token-level prediction 进行了诊断。
 
 结果：
@@ -435,10 +435,11 @@ Last 3 header tokens : 0
 Last body token      : 0
 Earlier body         : 110
 
-因此，本次 Streaming false positive 并非由 response 尾部的 special token 或额外 assistant header 触发，而全部发生在 response 正文较早位置。
-
+因此，本次 Streaming false positive 并非由 response 尾部的 special token 或额外 assistant header 触发，
+而全部发生在 response 正文较早位置。
+```
 按 assistant trajectory 长度统计 benign 样本：
-
+```text
 <=50 tokens:
 benign = 489
 FP = 0
@@ -458,7 +459,7 @@ FP rate = 0.0556
 benign = 952
 FP = 108
 FP rate = 0.1134
-
+```
 其中：
 
 110 个 Streaming false positive 中有 108 个来自长度超过 200 token 的 benign response；
@@ -507,6 +508,7 @@ Metric	                   Reproduction	   Paper
 Response-level harmful F1	0.9130	         —
 Streaming harmful F1	    0.9139	       0.9161
 原始输出：
+```text
 -------------Response level-------- 
                precision    recall  f1-score   support
 
@@ -527,6 +529,7 @@ weighted avg     0.9070    0.9070    0.9070      1000
     accuracy                         0.9060      1000
    macro avg     0.9078    0.9039    0.9052      1000
 weighted avg     0.9068    0.9060    0.9058      1000
+```
 
 ## Figure 3 Cross-model Transfer：Llama-3.1-8B → Qwen3-8B
 
@@ -555,6 +558,7 @@ Response-level harmful F1	0.8952	          —
 Streaming harmful F1	    0.8993	        0.8783
 
 原始输出：
+```text
 -------------Response level-------- 
                precision    recall  f1-score   support
 
@@ -575,6 +579,7 @@ weighted avg     0.8860    0.8850    0.8847      1000
     accuracy                         0.8860      1000
    macro avg     0.8949    0.8811    0.8840      1000
 weighted avg     0.8920    0.8860    0.8850      1000
+```
 
 ## Figure 3 Cross-model Transfer：Qwen3-8B → Qwen3-14B
 
@@ -602,6 +607,7 @@ Metric	                    Reproduction	Paper
 Response-level harmful F1	0.8859	         —
 Streaming harmful F1	    0.8795	       0.8827
 原始输出：
+```text
 -------------Response level-------- 
                precision    recall  f1-score   support
 
@@ -622,6 +628,7 @@ weighted avg     0.8820    0.8820    0.8820      1000
     accuracy                         0.8740      1000
    macro avg     0.8745    0.8734    0.8737      1000
 weighted avg     0.8743    0.8740    0.8739      1000
+```
 
 ## Figure 3 Cross-model Transfer：Llama-3.1-8B → Qwen3-14B
 
@@ -647,6 +654,7 @@ Metric	                   Reproduction	 Paper
 Response-level harmful F1	0.8503	       —
 Streaming harmful F1	    0.8095	     0.8171
 原始输出：
+```text
 -------------Response level-------- 
                precision    recall  f1-score   support
 
@@ -667,6 +675,7 @@ weighted avg     0.8511    0.8250    0.8208      1000
     accuracy                         0.7600      1000
    macro avg     0.8325    0.7529    0.7426      1000
 weighted avg     0.8280    0.7600    0.7446      1000
+```
 
 ## Figure 3 Cross-model Transfer：Qwen3-8B → Llama-3.1-8B
 
@@ -692,6 +701,7 @@ Metric	                    Reproduction	Paper
 Response-level harmful F1	0.7995	          —
 Streaming harmful F1	    0.8947	        0.8966
 原始输出：
+```text
 -------------Response level-------- 
                precision    recall  f1-score   support
 
@@ -712,6 +722,7 @@ weighted avg     0.8719    0.8460    0.8408      1000
     accuracy                         0.9080      1000
    macro avg     0.9108    0.9041    0.9065      1000
 weighted avg     0.9091    0.9080    0.9076      1000
+```
 
 ## Figure 3 Cross-model Transfer：Qwen3-14B → Llama-3.1-8B
 
@@ -737,6 +748,7 @@ Metric	                    Reproduction	Paper
 Response-level harmful F1	0.7895	         —
 Streaming harmful F1	    0.8966	       0.9046
 原始输出：
+```text
 -------------Response level-------- 
                precision    recall  f1-score   support
 
@@ -757,3 +769,4 @@ weighted avg     0.8654    0.8390    0.8334      1000
     accuracy                         0.9100      1000
    macro avg     0.9136    0.9058    0.9085      1000
 weighted avg     0.9116    0.9100    0.9096      1000
+```
