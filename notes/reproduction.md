@@ -121,7 +121,7 @@ weighted avg     0.9507    0.9513    0.9510      1725
     accuracy                         0.9351      1725
    macro avg     0.8668    0.9201    0.8902      1725
 weighted avg     0.9421    0.9351    0.9373      1725
-
+```
 Checkpoint:
 /data1/plugguard_repro/checkpoints/qwen3_8b_wildguard/model_epoch_0.pt
 
@@ -182,7 +182,7 @@ weighted avg     0.8670    0.8660    0.8660      1000
     accuracy                         0.8700      1000
    macro avg     0.8701    0.8696    0.8698      1000
 weighted avg     0.8700    0.8700    0.8700      1000
-
+```
 Checkpoint:
 /data1/plugguard_repro/checkpoints/qwen3_14b_seval/model_epoch_0.pt
 已知问题
@@ -242,7 +242,7 @@ weighted avg     0.9385    0.9391    0.9388      1725
     accuracy                         0.9281      1725
    macro avg     0.8486    0.8894    0.8671      1725
 weighted avg     0.9335    0.9281    0.9301      1725
-
+```
 Checkpoint:
 /data1/plugguard_repro/checkpoints/qwen3_14b_wildguard/model_epoch_0.pt
 已知问题:
@@ -312,7 +312,7 @@ weighted avg     0.9180    0.9180    0.9180      1000
     accuracy                         0.9270      1000
    macro avg     0.9257    0.9285    0.9266      1000
 weighted avg     0.9282    0.9270    0.9271      1000
-
+```
 Checkpoint:
 /data1/plugguard_repro/checkpoints/llama_3_1_8b_seval/model_epoch_0.pt
 已知问题:
@@ -385,7 +385,7 @@ weighted avg     0.9379    0.9374    0.9377      1725
     accuracy                         0.9148      1725
    macro avg     0.7901    0.8740    0.8237      1725
 weighted avg     0.9304    0.9148    0.9201      1725
-
+```
 Checkpoint:
 /data1/plugguard_repro/checkpoints/llama_3_1_8b_wildguard/model_epoch_0.pt
 实验过程中的兼容问题
@@ -501,7 +501,7 @@ Train features  : Qwen3-8B hidden states
 Test responses  : Qwen3-8B / S-Eval testset
 Test features   : Qwen3-8B hidden states
 为支持该实验，对 dataset.py 做了最小修改：assistant marker 不再依赖全局 ACTIVE_MODEL，而是根据实际传入的 model_name 选择对应配置。其余 PlugGuard 训练、损失函数、评测逻辑均保持不变。
-
+```
 复现结果
 Metric	                   Reproduction	   Paper
 Response-level harmful F1	0.9130	         —
@@ -548,7 +548,7 @@ Train responses : Llama-3.1-8B / S-Eval trainset
 Train features  : Qwen3-8B hidden states
 Test responses  : Qwen3-8B / S-Eval testset
 Test features   : Qwen3-8B hidden states
-
+```
 复现结果
 Metric	                    Reproduction	Paper
 Response-level harmful F1	0.8952	          —
@@ -596,7 +596,7 @@ Train responses : Qwen3-8B / S-Eval trainset
 Train features  : Qwen3-14B hidden states
 Test responses  : Qwen3-14B / S-Eval testset
 Test features   : Qwen3-14B hidden states
-
+```
 复现结果
 Metric	                    Reproduction	Paper
 Response-level harmful F1	0.8859	         —
@@ -641,6 +641,7 @@ Train responses : Llama-3.1-8B / S-Eval trainset
 Train features  : Qwen3-14B hidden states
 Test responses  : Qwen3-14B / S-Eval testset
 Test features   : Qwen3-14B hidden states
+```
 复现结果
 Metric	                   Reproduction	 Paper
 Response-level harmful F1	0.8503	       —
@@ -685,6 +686,7 @@ Train responses : Qwen3-8B / S-Eval trainset
 Train features  : Llama-3.1-8B hidden states
 Test responses  : Llama-3.1-8B / S-Eval testset
 Test features   : Llama-3.1-8B hidden states
+```
 复现结果：
 Metric	                    Reproduction	Paper
 Response-level harmful F1	0.7995	          —
@@ -729,6 +731,7 @@ Train responses : Qwen3-14B / S-Eval trainset
 Train features  : Llama-3.1-8B hidden states
 Test responses  : Llama-3.1-8B / S-Eval testset
 Test features   : Llama-3.1-8B hidden states
+```
 复现结果：
 Metric	                    Reproduction	Paper
 Response-level harmful F1	0.7895	         —
