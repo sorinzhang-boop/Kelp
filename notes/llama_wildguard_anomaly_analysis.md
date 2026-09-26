@@ -74,7 +74,7 @@ Streaming 使用 any-token 规则：只要 response 中任意 token 被预测为
 | 首次 harmful trigger 位置 | 数量 |
 |---|---:|
 | 最后 3 个 token | 0 |
-| `<|eot_id|>` | 0 |
+| <code>&lt;&#124;eot_id&#124;&gt;</code> | 0 |
 | response 最后一个正文 token | 0 |
 | 更早的 response 正文 token | 110 |
 
