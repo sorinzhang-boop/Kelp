@@ -262,33 +262,97 @@ Streaming F1 的增量：
 
 变化都很小。
 
-### 关于 raw loss
+### Training loss 趋势
 
-诊断脚本额外记录了未被 gradient accumulation 重复缩放的 raw loss。
+诊断脚本额外记录了每个 optimizer update 对应的未被 gradient accumulation 重复缩放的：
 
-raw loss 在不同 step 之间存在明显波动，但不能直接据此判断“没有收敛”，因为每个打印点只对应一个随机的 32-sample accumulation block，而 WildGuard 样本存在：
+- raw total loss
+- raw CE loss
+- raw smooth loss
+- anchor accuracy
+- learning rate
 
-- response 长度差异
-- benign / harmful 类别不均衡
-- 不同样本监督位置差异
+由于单个 optimizer step 只对应 32 条随机训练样本，不同 step 的样本长度、类别和监督位置均不同，因此单个 step 的 loss 波动较大，不适合直接用某几个瞬时 loss 判断是否收敛。
 
-因此，不同 block 的 raw loss 本身并不适合直接横向比较。
+因此，这里将整个 1-epoch 训练过程按 optimizer step 分成四段，对每一段约 296 个 update 的 loss 取平均。
 
-对于当前任务，更有意义的收敛证据是：
+| 训练区间 | Step 范围 | Mean raw total loss | Mean raw CE loss | Mean raw smooth loss | Mean anchor accuracy |
+|---|---:|---:|---:|---:|---:|
+| 0–25% | 1–296 | 0.159832 | 0.159699 | 0.000134 | 0.9411 |
+| 25–50% | 297–593 | 0.090333 | 0.090266 | 0.000067 | 0.9614 |
+| 50–75% | 594–889 | 0.081711 | 0.081662 | 0.000049 | 0.9663 |
+| 75–100% | 890–1185 | 0.079147 | 0.079099 | 0.000047 | 0.9662 |
 
-> 固定 test set 上的 Streaming harmful F1 是否继续系统性提高。
+分段平均 raw total loss 的变化为：
 
-从 50% 到 100%：
+`0.159832 → 0.090333 → 0.081711 → 0.079147`
 
-`0.6928 → 0.6969`
+各阶段下降幅度分别为：
 
-只提升约 `0.0041`。
+- 0–25% → 25–50%：`-0.069499`
+- 25–50% → 50–75%：`-0.008622`
+- 50–75% → 75–100%：`-0.002564`
+
+可以看到，loss 在训练前半程快速下降，而后半程下降幅度明显减小。
+
+同时，anchor accuracy：
+
+`0.9411 → 0.9614 → 0.9663 → 0.9662`
+
+在后半程也基本稳定。
+
+raw smooth loss 始终只有约 `1e-4 ~ 1e-5`，远小于 CE loss，因此当前 total loss 的整体变化主要由 CE loss 决定。
+
+另外，训练最后一段的局部平均值为：
+
+| 区间 | Mean raw total loss | Mean raw CE loss | Mean anchor accuracy |
+|---|---:|---:|---:|
+| Last 100 steps | 0.082229 | 0.082182 | 0.9659 |
+| Last 50 steps | 0.084214 | 0.084169 | 0.9661 |
+
+最后 50/100 step 的平均 loss 没有继续单调下降，而是在约 `0.08` 附近波动。这与不同 accumulation block 的样本组成有关，但至少没有表现出训练结束前仍持续快速下降的趋势。
+
+### Training metric 与 Streaming F1 的联合判断
+
+仅看 training loss 不能直接证明模型已经达到最优，因此还需要结合固定 test set 上的 Streaming F1。
+
+Streaming F1：
+
+`0.6266 → 0.6928 → 0.6955 → 0.6969`
+
+对应：
+
+| 训练进度 | Streaming F1 |
+|---|---:|
+| 25% | 0.6266 |
+| 50% | 0.6928 |
+| 75% | 0.6955 |
+| 100% | 0.6969 |
+
+其增量为：
+
+- 25% → 50%：`+0.0662`
+- 50% → 75%：`+0.0027`
+- 75% → 100%：`+0.0014`
+
+因此可以观察到一致的两阶段现象：
+
+1. 训练前半程：training loss 快速下降，同时 Streaming F1 快速提升；
+2. 训练后半程：training loss 下降幅度显著减小，同时 Streaming F1 基本进入平台。
+
+此外，cosine learning-rate schedule 在 1 epoch 内也已经完整执行，训练末期 learning rate 已衰减至接近 0。
+
+需要说明的是，中间的 test-set 评测仅用于复现后的诊断，没有用于选择 checkpoint、early stopping 或调节超参数。
 
 ### 结论
 
-> “1 epoch 明显没有收敛”基本可以排除。
+> 当前结果不能证明模型在严格优化意义上已经达到全局最优，也不能证明增加 epoch 一定不会带来任何变化。
 
-当前 1-epoch recipe 至少在 Streaming F1 上已经基本稳定在约 `0.69 ~ 0.70`，而不是在 epoch 结束时仍持续快速上升。
+但 training loss 和 Streaming F1 给出了相互一致的证据：
+
+> **在论文规定的 1-epoch training budget 内，模型已经从前半程的快速学习阶段进入后半程的平台阶段。没有证据表明论文结果与复现结果之间约 0.1146 的 Streaming F1 差距主要来自“训练结束时仍明显未收敛”。**
+
+因此，“明显未收敛”可以基本排除为当前异常的主要原因。
 
 ---
 
