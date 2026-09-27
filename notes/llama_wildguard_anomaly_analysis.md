@@ -139,11 +139,14 @@ Cache 检查结果：
 - supervised tokens：`10`
 - PlugGuard architecture：不变
 
-只进行以下三个诊断：
+本轮及后续追加诊断包括：
 
 1. Seed sweep
 2. 最后一个 gradient accumulation remainder 对照
 3. 1 epoch 内 Streaming F1 收敛曲线
+4. inference-time `dt` 论文设置与公开代码设置对照
+5. 实际 cache sequence length / max length 检查
+6. ATC supervised token 数 `N` 的多卡 sweep 与 seed robustness 对照
 
 ---
 
@@ -383,29 +386,222 @@ Streaming F1：
 
 后半个 epoch 已进入平台区。
 
+### 8.4 Inference-time dt 设置
+
+论文描述的 SLD 时间步长为：
+
+- training：`dt = 1 / Ta`
+- inference：`dt = 1 / 2048`
+
+而当前公开代码在 inference 时仍根据 assistant trajectory 长度构造 `dt`，近似为：
+
+`dt ≈ 1 / (Ta - 1)`
+
+因此使用同一个 seed=42 checkpoint 和同一份 WildGuard test cache，仅修改 inference-time `dt` 做对照。
+
+| Setting | Response F1 | Streaming Precision | Streaming Recall | Streaming F1 | FP | FN |
+|---|---:|---:|---:|---:|---:|---:|
+| Public code：`dt ≈ 1/(Ta-1)` | 0.7404 | 0.6057 | 0.8204 | 0.6969 | 110 | 37 |
+| Paper inference：`dt = 1/2048` | 0.7404 | 0.6057 | 0.8204 | 0.6969 | 110 | 37 |
+
+两种设置下：
+
+- Streaming prediction changed：`0 / 1725`
+- Response-level prediction changed：`0 / 1725`
+
+#### 结论
+
+> 论文与公开代码的 inference-time `dt` 设置确实存在差异，但在当前 Llama + WildGuard checkpoint 上，将 `dt` 改为论文描述的 `1/2048` 后，没有任何测试样本改变最终分类结果。
+
+因此：
+
+> **Inference-time `dt` mismatch 不能解释当前 Streaming F1 从论文 0.8115 到复现 0.6969 的差距。**
+
+该实验只排除了 inference-time `dt` 的影响，不代表训练阶段 `dt` 的所有实现差异均已被严格验证。
+
+---
+
+### 8.5 Max sequence length / truncation 检查
+
+论文实验设置 maximum sequence length 为 `4096`。
+
+当前公开代码在 `apply_chat_template(..., tokenize=False)` 时传入了 `max_length` 和 `truncation`，但随后真正执行 tokenizer 的调用没有再次显式传入这两个参数。因此检查现有 Llama + WildGuard cache 的实际 sequence length。
+
+#### Train cache
+
+| Statistic | Full sequence length |
+|---|---:|
+| Samples | 37934 |
+| P50 | 467 |
+| P90 | 906 |
+| P95 | 1017.3 |
+| P99 | 1388 |
+| Max | 2650 |
+| `>4096` | 0 |
+
+#### Test cache
+
+| Statistic | Full sequence length |
+|---|---:|
+| Samples | 1725 |
+| P50 | 574 |
+| P90 | 919 |
+| P95 | 1009.8 |
+| P99 | 1282.6 |
+| Max | 2303 |
+| `>4096` | 0 |
+
+另外，对所有 train/test cache 均有：
+
+`(seq_len - assistant_start) - assistant_len = 0`
+
+说明当前 cache 中的 sequence length、assistant start 和 assistant trajectory length 在长度关系上完全一致。
+
+#### 结论
+
+> Train 和 test 中均不存在超过 4096 token 的 cached sequence。
+
+因此：
+
+> **虽然当前 tokenizer 调用存在潜在的 truncation 实现隐患，但该问题没有在现有 Llama + WildGuard 数据上实际触发，不能解释当前 Streaming F1 异常。**
+
+---
+
+### 8.6 ATC supervised token 数 N 的对照实验
+
+论文主实验使用 `N=10`。为检查 supervised token 数是否导致 Llama + WildGuard 的 Streaming F1 异常，在保持其他训练配置不变的情况下，复用已有 hidden-state cache，对 `N=1~10` 进行 sweep。
+
+固定：
+
+- seed：`42`
+- learning rate：`5e-5`
+- weight decay：`0`
+- epoch：`1`
+- effective global batch：`32`
+- idx layer：`20`
+- 其余 PlugGuard 结构及训练逻辑不变
+
+#### Seed=42 的 N sweep
+
+| N | Precision | Recall | Streaming F1 | FP | FN | Response F1 |
+|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 0.2385 | 0.9854 | 0.3841 | 648 | 3 | 0.7447 |
+| 2 | 0.2164 | 0.9854 | 0.3549 | 735 | 3 | 0.7593 |
+| 3 | 0.2371 | 0.9854 | 0.3823 | 653 | 3 | 0.7677 |
+| 4 | 0.2570 | 0.9806 | 0.4073 | 584 | 4 | 0.7554 |
+| 5 | 0.4013 | 0.9272 | 0.5601 | 285 | 15 | 0.7512 |
+| 6 | 0.5394 | 0.8641 | 0.6642 | 152 | 28 | 0.7458 |
+| 7 | 0.5743 | 0.8447 | 0.6837 | 129 | 32 | 0.7391 |
+| 8 | 0.5911 | 0.8350 | 0.6922 | 119 | 34 | 0.7373 |
+| 9 | 0.6014 | 0.8204 | 0.6940 | 112 | 37 | 0.7373 |
+| 10 | 0.6057 | 0.8204 | **0.6969** | 110 | 37 | 0.7404 |
+
+`N=10, seed=42` 精确复现了之前的 baseline：
+
+`Streaming F1 = 0.6969`
+
+说明本次从现有 cache 重建不同 N 的监督标签并重新训练的实验流程与原 baseline 一致。
+
+从结果看，较小 N 下 harmful Recall 很高，但 Precision 很低，主要原因是 Streaming FP 大量增加。
+
+例如：
+
+`FP: 648 (N=1) → 285 (N=5) → 152 (N=6) → 110 (N=10)`
+
+随着 N 增大，FP 显著下降，Precision 上升；同时 Recall 有一定下降。最终在当前 seed=42 下，Streaming F1 在 `N=8~10` 附近逐渐进入平台。
+
+#### Seed robustness
+
+进一步对 `N=4/6/8` 分别使用 seed=21、42、123：
+
+| N | Seed 21 F1 | Seed 42 F1 | Seed 123 F1 | Mean | Std |
+|---:|---:|---:|---:|---:|---:|
+| 4 | 0.7306 | 0.4073 | 0.3725 | 0.5034 | 0.1612 |
+| 6 | 0.7182 | 0.6642 | 0.6571 | 0.6798 | 0.0273 |
+| 8 | 0.7149 | 0.6922 | 0.6874 | 0.6982 | 0.0120 |
+
+结合之前 `N=10` 的 5-seed 实验：
+
+`mean = 0.6972, std = 0.0119`
+
+可以看到：
+
+- 较小 N 的结果对 seed 非常敏感；
+- 随 N 增大，seed 方差明显降低；
+- `N=8~10` 已进入较稳定的平台区；
+- 当前论文默认的 `N=10` 并不是导致异常低 F1 的明显错误设置。
+
+本轮 16 个 N/seed 实验中最高 Streaming F1 为：
+
+`N=4, seed=21：0.7306`
+
+仍低于论文结果 `0.8115`：
+
+`0.8115 - 0.7306 = 0.0809`
+
+即仍有约 **8.09 个百分点**差距。
+
+#### 结论
+
+> **ATC supervised token 数 N 会显著影响 Streaming Precision/Recall trade-off，特别是较小 N 会产生大量 FP 和较强的 seed 敏感性。**
+
+但：
+
+> **在当前 Llama + WildGuard 上，N=8~10 已形成相对稳定的性能平台，默认 N=10 不能解释论文与复现之间的主要差距。**
+
+另外，N sweep 中 Response-level F1 始终约为 `0.74~0.77`，而 Streaming F1 变化范围很大。这进一步说明当前异常主要体现在 token-level Streaming 判定，而不是最终 response-level 分类完全失效。
+
+
 ---
 
 ## 9. 当前阶段结论
 
-目前最可靠的总结是：
+经过目前的对照实验，已经依次检查：
 
-> **Llama-3.1-8B + WildGuard 的低 Streaming F1 是一个稳定、可重复的异常，而不是随机种子、最后一个 optimizer step 或明显未收敛造成的。**
+- 随机种子
+- optimizer update remainder
+- 1-epoch 收敛情况
+- inference-time `dt`
+- maximum sequence length / truncation
+- ATC supervised token 数 `N`
 
-该异常的主要表现为：
+当前结果如下：
 
-> **harmful Recall 尚可，但 harmful Precision 偏低，即 benign response 的 Streaming false positive 明显偏多。**
+| Diagnostic | Result |
+|---|---|
+| Seed | 5-seed mean `0.6972 ± 0.0119`，无法接近论文 `0.8115` |
+| Optimizer remainder | 1185 vs 1186 steps 均为 `0.6969` |
+| Convergence | training loss 与 Streaming F1 在后半程均进入平台 |
+| Inference `dt` | 改为论文 `1/2048` 后 1725 条 prediction 全部不变 |
+| Max length | train/test 均无 sequence `>4096` |
+| ATC `N` | `N=8~10` 进入稳定平台，默认 `N=10` 不是明显异常来源 |
 
-并且：
+因此目前可以较有把握地认为：
 
-> **这些 false positive 几乎全部发生在较长的 benign response 中，首次 harmful trigger 来自 response 正文内部，而不是尾部 special token。**
+> **Llama-3.1-8B + WildGuard 的 Streaming F1 异常低不是由单一的 seed、最后一个 optimizer step、明显未收敛、inference-time dt、4096 truncation 或默认 N=10 所造成。**
 
-因此，目前问题已经从：
+当前最稳定的错误模式仍然是：
 
-> “训练是不是没调好？”
+> **harmful Recall 尚可，但 harmful Precision 偏低，即 Streaming false positive 偏多。**
 
-转变为：
+在 baseline 中：
 
-> **“为什么 Llama hidden-state trajectory 在 WildGuard 的长 benign response 上更容易出现局部 harmful trigger？”**
+- harmful Precision：`0.6057`
+- harmful Recall：`0.8204`
+- FP：`110`
+- FN：`37`
+
+此前的位置诊断还表明：
+
+- 110 个 FP 的首次 harmful trigger 均出现在 response 正文内部；
+- 不是尾部 special token 触发；
+- 110 个 FP 中有 108 个来自长度 `>200 token` 的 benign response。
+
+因此当前最可靠的实验性结论是：
+
+> **Llama + WildGuard 的异常主要表现为长 benign response 的 token-level Streaming false positive，而不是最终 response-level 分类完全失效。**
+
+目前已有实验能够排除若干简单的训练配置解释，但尚未定位论文结果 `0.8115` 与当前复现 `0.6969` 之间差距的唯一根因。
 
 ---
 
@@ -424,86 +620,19 @@ Streaming F1：
 
 ---
 
-## 11. 下一步建议
-
-下一阶段不建议继续盲目扫 seed、epoch 或 optimizer step。
-
-更有价值的是做 **Llama vs Qwen 的 WildGuard trajectory 对比**。
-
-### 11.1 同长度条件下比较 FP rate
-
-在相同长度区间内比较：
-
-- Qwen3-8B + WildGuard
-- Llama-3.1-8B + WildGuard
-
-统计：
-
-- benign 数量
-- Streaming FP 数量
-- FP rate
-
-如果同长度下 Llama 仍显著更高，说明问题不只是“Llama response 更长”。
-
-### 11.2 比较 benign response 的 token-level harmful trajectory
-
-对长度匹配的 benign response，比较：
-
-- 最大 harmful score / probability
-- 首次 harmful trigger 的位置
-- harmful spike 数量
-- spike 是否集中在某类语义片段
-- trajectory 随 token 位置的变化
-
-目标是回答：
-
-> Llama 是否更容易在长 benign response 中产生局部 harmful spike？
-
-### 11.3 对比 Qwen 与 Llama 的 tokenization / trajectory 长度
-
-统计并比较：
-
-- response token 数
-- tokenizer 分词差异
-- hidden trajectory 长度
-- 长度与 FP 的关系
-
-用于区分：
-
-- 只是 token 数更多，所以 any-token 更容易误触
-- 即使控制 token 数，Llama 的表征仍更容易产生 harmful spike
-
-### 11.4 检查 Llama 特有的输入模板与 hidden-state extraction
-
-当前 Llama 适配使用 Llama assistant marker，并沿用：
-
-```python
-tokenizer.apply_chat_template(
-    messages,
-    tokenize=False,
-    add_generation_prompt=True,
-)
-```
-
-以及当前 assistant trajectory 截取逻辑。
-
-虽然已有诊断表明 FP 不是尾部 special token 直接触发，但仍应进一步检查：
-
-- 完整 token sequence
-- `assistant_start` 是否严格正确
-- response 后是否存在额外 assistant header
-- Llama 与 Qwen 的模板差异是否改变 hidden trajectory
-
-这属于下一阶段较高优先级的实现检查。
-
----
-
-## 12. 实验产物
+## 11. 实验产物
 
 本轮诊断日志目录：
 
 ```text
 /data1/plugguard_repro/logs/llama_wildguard_diagnostics/20260926_164936/
+
+```
+Inference dt 对照
+
+```text
+/data1/plugguard_repro/diagnostics/llama_wildguard_dt_compare.json
+
 ```
 
 主要实验：
@@ -533,6 +662,6 @@ summary.csv
 
 ---
 
-## 13. 一句话总结
+## 12. 一句话总结
 
-> **Llama + WildGuard 的 Streaming F1 异常低是稳定现象：5 个 seed 均无法接近论文结果，补齐最后一个 optimizer step 无影响，1 epoch 后半程 F1 已基本平台化；当前最主要的错误模式是长 benign response 中出现正文内部的局部 harmful trigger，导致 any-token Streaming 判定产生大量 false positive。**
+> **Llama + WildGuard 的 Streaming F1 异常低是稳定、可重复的现象：多 seed、optimizer step、收敛状态、inference dt、sequence truncation 和 ATC N 均不能解释论文 0.8115 与复现 0.6969 的主要差距；当前最稳定的异常表现是长 benign response 正文内部出现 token-level harmful false positive，导致 any-token Streaming 判定的 Precision 明显下降。**
