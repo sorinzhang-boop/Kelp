@@ -793,3 +793,35 @@ weighted avg     0.8654    0.8390    0.8334      1000
    macro avg     0.9136    0.9058    0.9085      1000
 weighted avg     0.9116    0.9100    0.9096      1000
 ```
+
+## Table 2 Latency 复现
+
+### 实验设置
+
+- Base model: Qwen3-8B
+- Input: 1000 tokens
+- Generation length: 1 / 512 / 1024 tokens
+- Framework: Transformers
+- Reproduction hardware: 8 × NVIDIA RTX 6000D
+- Paper hardware: NVIDIA H20
+- 每张 GPU 独立运行 Base / Sequential / Parallel，每个设置重复 100 runs。
+- 表中 Reproduction latency 为 8 张 GPU 各自 100-run mean 的平均值，因此每个数值汇总了 800 次 measured runs。
+- Overhead 采用同一张 GPU 上 `PlugGuard - Base` 的 paired difference，再对 8 张 GPU 取平均。
+- Sequential 基于仓库公开 latency demo 和当前 `models.py` 做接口兼容；Parallel 公开仓库未提供完整实现，本次按照论文描述使用 `torch.cuda.Stream` 重建异步计算流。
+
+### 复现结果
+
+| Setting / Mode | First Repro. | First Paper | 512 Repro. | 512 Paper | 1024 Repro. | 1024 Paper |
+|---|---:|---:|---:|---:|---:|---:|
+| Qwen3-8B (Base) | 0.1274 | 0.1328 | 8.5071 | 11.3969 | 16.9840 | 22.6776 |
+| + PlugGuard (Sequential) | 0.1371 | 0.1341 | 8.5605 | 11.7048 | 17.0911 | 23.1048 |
+| *Overhead* | +0.0096 | +0.0013 | +0.0533 | +0.3079 | +0.1071 | +0.4272 |
+| + PlugGuard (Parallel) | 0.1369 | 0.1341 | 8.5139 | 11.3973 | 16.9859 | 22.6780 |
+| *Overhead* | +0.0095 | +0.0013 | +0.0067 | ≤0.001 | +0.0019 | ≤0.001 |
+
+### 简要结论
+
+- 绝对生成时间与论文不同，主要实验硬件不同（RTX 6000D vs. H20），因此重点比较 PlugGuard 相对 Base 的额外开销。
+- 与论文趋势一致，Sequential 会引入额外时延；1024 tokens 时本次 overhead 为 `+0.1071 s`。
+- Parallel 将 1024-token overhead 从约 `107 ms` 降至约 `2 ms`，说明 PlugGuard 的计算开销能够被下一 token 的模型推理大幅掩盖。
+- Parallel 的趋势得到复现，但本次 `512 / 1024` overhead 为约 `6.7 / 1.9 ms`，未严格达到论文报告的 `≤1 ms`。
