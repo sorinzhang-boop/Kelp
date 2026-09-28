@@ -554,7 +554,7 @@ Streaming F1：
 
 ---
 
-## 9. 当前阶段结论
+## 9. 超参数扫描前的阶段性结论
 
 经过目前的对照实验，已经依次检查：
 
@@ -601,67 +601,190 @@ Streaming F1：
 
 > **Llama + WildGuard 的异常主要表现为长 benign response 的 token-level Streaming false positive，而不是最终 response-level 分类完全失效。**
 
-目前已有实验能够排除若干简单的训练配置解释，但尚未定位论文结果 `0.8115` 与当前复现 `0.6969` 之间差距的唯一根因。
+截至这一阶段，已有实验能够排除若干简单解释，但尚未定位论文结果 `0.8115` 与当前复现 `0.6969` 之间差距的主要可控因素。因此继续进行更系统的训练超参数扫描。
 
 ---
 
-## 10. 当前尚不能下的结论
+## 10. 超参数扫描前小结
 
-当前实验还不能证明：
-
-1. 长 response 本身就是根因
-2. Llama tokenizer 一定导致异常
-3. Llama hidden state 天生比 Qwen 更难做 Streaming safety detection
-4. 论文结果有误
-5. 增加 epoch 数一定会解决问题
-6. 修改阈值一定能恢复论文结果
-
-这些都需要进一步对照实验。
+> **截至超参数扫描之前，Llama + WildGuard 的 Streaming F1 异常低表现为稳定、可重复的现象：多 seed、optimizer step、收敛状态、inference dt、sequence truncation 和 ATC N 均不能解释论文 `0.8115` 与复现 `0.6969` 的主要差距；baseline 的主要错误模式是 benign response 的 token-level false positive 偏多。**
 
 ---
 
-## 11. 实验产物
+## 11. 系统超参数扫描：定位 learning rate 敏感性
 
-本轮诊断日志目录：
+在排除 seed、optimizer step、明显未收敛、inference-time `dt`、sequence truncation 和 ATC `N` 等因素后，进一步利用 8 张 GPU 对训练超参数进行 one-factor-at-a-time 扫描。
 
-```text
-/data1/plugguard_repro/logs/llama_wildguard_diagnostics/20260926_164936/
+实验继续复用已有 Llama hidden-state cache，不重新提取 hidden states。
 
-```
-Inference dt 对照
+除被测试参数外，其余配置保持 baseline：
 
-```text
-/data1/plugguard_repro/diagnostics/llama_wildguard_dt_compare.json
+- seed：`42`
+- learning rate：`5e-5`
+- weight decay：`0`
+- warmup ratio：`0.05`
+- effective global batch：`32`
+- ATC supervised token 数：`N=10`
+- epoch：`1`
+- idx layer：`20`
 
-```
+baseline Streaming F1 为：
 
-主要实验：
+`0.6969`
 
-```text
-seed1_orig
-seed21_orig
-seed42_orig
-seed123_orig
-seed3407_orig
-seed42_flush
-```
+### 11.1 完整扫描结果
 
-其中：
+| Setting | Value | Precision | Recall | Streaming F1 | FP | FN | Response F1 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Baseline | `lr=5e-5` | 0.6057 | 0.8204 | 0.6969 | 110 | 37 | 0.7404 |
+| Learning rate | `1e-5` | 0.3513 | 0.7913 | 0.4866 | 301 | 43 | 0.0287 |
+| Learning rate | `2.5e-5` | 0.3233 | 0.9369 | 0.4807 | 444 | 13 | 0.6620 |
+| Learning rate | `1e-4` | **0.7870** | **0.8252** | **0.8057** | **46** | **36** | **0.8186** |
+| Learning rate | `2e-4` | 0.7613 | 0.8204 | 0.7897 | 53 | 37 | 0.8229 |
+| Weight decay | `0.001` | 0.6057 | 0.8204 | 0.6969 | 110 | 37 | 0.7404 |
+| Weight decay | `0.01` | 0.6057 | 0.8204 | 0.6969 | 110 | 37 | 0.7404 |
+| Weight decay | `0.1` | 0.6057 | 0.8204 | 0.6969 | 110 | 37 | 0.7404 |
+| Global batch | `8` | 0.6367 | 0.8252 | 0.7188 | 97 | 36 | 0.7494 |
+| Global batch | `16` | 0.6176 | 0.8155 | 0.7029 | 104 | 38 | 0.7470 |
+| Global batch | `64` | 0.6198 | 0.7913 | 0.6951 | 100 | 43 | 0.7170 |
+| Global batch | `128` | 0.5629 | 0.7816 | 0.6545 | 125 | 45 | 0.7048 |
+| Warmup ratio | `0` | 0.6284 | 0.7961 | 0.7024 | 97 | 42 | 0.7470 |
+| Warmup ratio | `0.10` | 0.5777 | 0.8301 | 0.6813 | 125 | 35 | 0.7422 |
+| ATC N | `12` | 0.5972 | 0.8204 | 0.6912 | 114 | 37 | 0.7393 |
+| ATC N | `16` | 0.5903 | 0.8252 | 0.6883 | 118 | 36 | 0.7399 |
+| ATC N | `20` | 0.5836 | 0.8301 | 0.6854 | 122 | 35 | 0.7277 |
 
-```text
-seed42_orig.log
-```
+### 11.2 Learning rate 是影响最大的超参数
 
-包含 25% / 50% / 75% / 100% 的收敛诊断。
+所有扫描参数中，learning rate 的影响最明显。
 
-最终汇总文件位于对应 diagnostics 输出目录中的：
+baseline：
 
-```text
-summary.csv
-```
+`lr=5e-5 → Streaming F1=0.6969`
 
----
+将 learning rate 提高到：
 
-## 12. 一句话总结
+`lr=1e-4 → Streaming F1=0.8057`
 
-> **Llama + WildGuard 的 Streaming F1 异常低是稳定、可重复的现象：多 seed、optimizer step、收敛状态、inference dt、sequence truncation 和 ATC N 均不能解释论文 0.8115 与复现 0.6969 的主要差距；当前最稳定的异常表现是长 benign response 正文内部出现 token-level harmful false positive，导致 any-token Streaming 判定的 Precision 明显下降。**
+提升：
+
+`0.8057 - 0.6969 = 0.1088`
+
+即提升约 **10.88 个百分点**。
+
+论文报告：
+
+`Streaming F1=0.8115`
+
+因此当前 `lr=1e-4` 的结果与论文只差：
+
+`0.8115 - 0.8057 = 0.0058`
+
+即约 **0.58 个百分点**。
+
+更重要的是，性能提升主要来自 false positive 的显著减少。
+
+| Setting | Precision | Recall | FP | FN | Streaming F1 |
+|---|---:|---:|---:|---:|---:|
+| `lr=5e-5` | 0.6057 | 0.8204 | 110 | 37 | 0.6969 |
+| `lr=1e-4` | **0.7870** | **0.8252** | **46** | **36** | **0.8057** |
+
+Recall 基本保持不变：
+
+`0.8204 → 0.8252`
+
+而 FP：
+
+`110 → 46`
+
+减少了 64 条。
+
+因此：
+
+> **此前观察到的主要异常——benign response 的 Streaming false positive 偏多——在提高 learning rate 后被大幅缓解。**
+
+这说明当前 Llama + WildGuard 组合对 optimization setting，尤其是 learning rate，存在明显敏感性。
+
+### 11.3 其他超参数的影响
+
+#### Weight decay
+
+三个非零 weight decay 设置：
+
+- `0.001`
+- `0.01`
+- `0.1`
+
+均得到完全相同的：
+
+`Streaming F1=0.6969`
+
+因此在当前实验中，weight decay 没有观察到可见影响。
+
+#### Global batch size
+
+结果为：
+
+- GB=8：`0.7188`
+- GB=16：`0.7029`
+- GB=32：`0.6969`
+- GB=64：`0.6951`
+- GB=128：`0.6545`
+
+较小 global batch 有一定提升，而过大的 batch 会明显降低 Streaming F1。
+
+但其影响幅度明显小于 learning rate。
+
+#### Warmup ratio
+
+- warmup=0：`0.7024`
+- warmup=0.05：`0.6969`
+- warmup=0.10：`0.6813`
+
+warmup 会产生一定影响，但同样无法解释原始约 11.46 个百分点的差距。
+
+#### N > 10
+
+继续增大 ATC supervised token 数：
+
+- N=10：`0.6969`
+- N=12：`0.6912`
+- N=16：`0.6883`
+- N=20：`0.6854`
+
+结果表明 N 超过 10 后 Streaming F1 反而逐渐下降。
+
+因此此前的 N sweep 可以进一步确认：
+
+> `N=10` 已位于当前配置下的较优区域，继续增大 N 不能解决该异常。
+
+### 11.4 最终结论
+
+经过完整诊断路径：
+
+1. 排查 Streaming FP 的位置与 response 长度；
+2. 进行多 seed 对照；
+3. 检查 optimizer remainder；
+4. 检查 1-epoch 收敛状态和 training loss；
+5. 检查 inference-time `dt`；
+6. 检查 max sequence length / truncation；
+7. 扫描 ATC supervised token 数 `N`；
+8. 最后系统扫描 learning rate、weight decay、global batch 和 warmup；
+
+最终发现：
+
+> **在当前公开代码和复现环境下，Llama-3.1-8B + WildGuard 对 learning rate 高度敏感。将 learning rate 从论文/当前 baseline 使用的 `5e-5` 调整为 `1e-4`，Streaming F1 从 `0.6969` 提升至 `0.8057`，与论文 `0.8115` 仅差 `0.0058`。**
+
+同时：
+
+> **该提升主要来自 Streaming false positive 从 110 降至 46，而 harmful Recall 基本保持不变。**
+
+因此，从当前复现实验来看：
+
+> **learning rate 是目前找到的、能够解释当前低分现象的最主要可控训练因素。**
+
+需要注意的是，论文实验设置中写明 learning rate 为 `5e-5`。因此，本实验不能证明论文实际使用了 `1e-4`，也不能据此修改论文报告的训练配置。
+
+目前能够确认的是：
+
+> **在公开代码、当前环境及现有数据 cache 下，`5e-5` 会得到约 `0.6969`，而 `1e-4` 可稳定地将单次 seed=42 结果提升到 `0.8057`。论文为何在其报告的 `5e-5` 设置下得到 `0.8115`，仅凭当前公开材料仍无法确定。**
