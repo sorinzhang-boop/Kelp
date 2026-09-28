@@ -37,6 +37,7 @@ de7abe9bb1af1186e12b3fe5bf7fab65c2fdc550
 - 论文未明确说明 Table 1 的 F1 averaging 方式，目前暂按 harmful 类（label=1）的 F1 与论文结果比较。
 
 原始输出：
+```text
 -------------Response level-------- 
                precision    recall  f1-score   support
 
@@ -57,7 +58,7 @@ weighted avg     0.9031    0.9030    0.9030      1000
     accuracy                         0.9000      1000
    macro avg     0.9000    0.8990    0.8994      1000
 weighted avg     0.9000    0.9000    0.8999      1000
-
+```
 Checkpoint:
 
 ```text
