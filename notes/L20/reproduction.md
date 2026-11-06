@@ -78,3 +78,63 @@ weighted avg     0.9174    0.9140    0.9135      1000
 ```
 
 本次 Response-level F1 和 Streaming F1 均接近论文报告值。
+
+---
+
+## Qwen3-8B + WildGuard
+
+### 实验配置
+
+与前述 Qwen3-8B + S-Eval 实验配置一致，仅替换数据集。
+
+- Dataset：StreamGuardBench v1 / WildGuard
+- Train / Test：37934 / 1725
+- Hidden Layer：20
+- Test：benign 1441，harmful 284
+
+### 复现结果
+
+以下 F1 均为 harmful 类（label=1）。
+
+| Metric | 本次复现 | 论文 | 差值 |
+|---|---:|---:|---:|
+| Response-level F1 | **0.8520** | 0.8462 | +0.0058 |
+| Streaming F1 | **0.8176** | 0.8333 | -0.0157 |
+
+- Response accuracy：0.9525
+- Streaming accuracy：0.9351
+
+### 原始评测输出
+
+```text
+-------------Response level--------
+              precision    recall  f1-score   support
+
+           0     0.9670    0.9764    0.9717      1441
+           1     0.8741    0.8310    0.8520       284
+
+    accuracy                         0.9525      1725
+   macro avg     0.9205    0.9037    0.9118      1725
+weighted avg     0.9517    0.9525    0.9520      1725
+
+
+-----------Streaming level-----------
+              precision    recall  f1-score   support
+
+           0     0.9763    0.9452    0.9605      1441
+           1     0.7606    0.8838    0.8176       284
+
+    accuracy                         0.9351      1725
+   macro avg     0.8685    0.9145    0.8890      1725
+weighted avg     0.9408    0.9351    0.9370      1725
+```
+
+### 实验记录
+
+- 训练及测试缓存构建完成。
+- Checkpoint：`checkpoints/qwen3_8b_wildguard/model_epoch_0.pt`
+- Log：`logs/qwen3_8b_wildguard_train.log`
+- 完整流程日志：`logs/qwen3_8b_wildguard_pipeline.log`
+- 梯度累积尾部：37934 = 1185 × 32 + 14，最后 14 条样本未触发 `optimizer.step()`，保持原实现。
+
+本次 Response-level F1 略高于论文结果，Streaming F1 低于论文结果 0.0157。
