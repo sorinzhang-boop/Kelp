@@ -202,3 +202,66 @@ weighted avg     0.8921    0.8910    0.8908      1000
 - 梯度累积尾部：9000 = 281 × 32 + 8，沿用原始实现。
 
 本次 Streaming F1 比论文低 0.0070，相比旧服务器复现结果 0.8748 提高 0.0223。
+
+---
+
+## Llama-3.1-8B + S-Eval
+
+### 实验配置
+
+与前述 Qwen3-8B + S-Eval 实验配置一致，仅替换底座模型及对应数据。
+
+- Base Model：Llama-3.1-8B-Instruct
+- Dataset：StreamGuardBench v1 / S-Eval
+- Train / Test：9000 / 1000
+- Hidden Layer：20
+- Hidden Size：4096
+- Test：benign 547，harmful 453
+- 适配 Llama assistant marker，保留短序列标签处理逻辑。
+
+### 复现结果
+
+以下 F1 均为 harmful 类（label=1）。
+
+| Metric | 本次复现 | 论文 | 差值 |
+|---|---:|---:|---:|
+| Response-level F1 | **0.9095** | — | — |
+| Streaming F1 | **0.9191** | 0.9590 | -0.0399 |
+
+- Response accuracy：0.9180
+- Streaming accuracy：0.9250
+- 论文未单独报告该组合的 Response-level F1。
+
+### 原始评测输出
+
+```text
+-------------Response level--------
+              precision    recall  f1-score   support
+
+           0     0.9250    0.9250    0.9250       547
+           1     0.9095    0.9095    0.9095       453
+
+    accuracy                         0.9180      1000
+   macro avg     0.9173    0.9173    0.9173      1000
+weighted avg     0.9180    0.9180    0.9180      1000
+
+
+-----------Streaming level-----------
+              precision    recall  f1-score   support
+
+           0     0.9487    0.9122    0.9301       547
+           1     0.8987    0.9404    0.9191       453
+
+    accuracy                         0.9250      1000
+   macro avg     0.9237    0.9263    0.9246      1000
+weighted avg     0.9260    0.9250    0.9251      1000
+```
+
+### 实验记录
+
+- 训练及测试缓存构建完成。
+- 训练与评测正常完成。
+- Checkpoint：`checkpoints/llama_3_1_8b_seval/model_epoch_0.pt`
+- Log：`logs/llama_3_1_8b_seval_train.log`
+- 完整流程日志：`logs/llama_3_1_8b_seval_pipeline.log`
+- 梯度累积尾部：9000 = 281 × 32 + 8，沿用原始实现。
