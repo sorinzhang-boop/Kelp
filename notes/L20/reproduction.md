@@ -265,3 +265,75 @@ weighted avg     0.9260    0.9250    0.9251      1000
 - Log：`logs/llama_3_1_8b_seval_train.log`
 - 完整流程日志：`logs/llama_3_1_8b_seval_pipeline.log`
 - 梯度累积尾部：9000 = 281 × 32 + 8，沿用原始实现。
+
+---
+
+## Figure 3 Cross-model Transfer：Qwen3-14B → Qwen3-8B
+
+### 实验设置
+
+复现 Figure 3 第一行第二列：
+
+- Source Model：Qwen3-14B
+- Target Model：Qwen3-8B
+- Dataset：S-Eval
+- Train / Test：9000 / 1000
+- Hidden Layer：20
+- 其余训练参数与 Qwen3-8B + S-Eval baseline 一致。
+
+具体流程：
+
+```text
+Train responses : Qwen3-14B / S-Eval trainset
+Train features  : Qwen3-8B hidden states
+Test responses  : Qwen3-8B / S-Eval testset
+Test features   : Qwen3-8B hidden states
+PlugGuard head  : 重新训练
+```
+
+### 复现结果
+
+以下 F1 均为 harmful 类（label=1）。
+
+| Metric | Reproduction | Paper |
+|---|---:|---:|
+| Response-level F1 | **0.9101** | — |
+| Streaming F1 | **0.9175** | 0.9161 |
+
+- Response accuracy：0.9050
+- Streaming accuracy：0.9110
+- Streaming F1 比论文高 0.0014。
+
+### 原始评测输出
+
+```text
+-------------Response level--------
+              precision    recall  f1-score   support
+
+           0     0.8908    0.9079    0.8993       467
+           1     0.9179    0.9024    0.9101       533
+
+    accuracy                         0.9050      1000
+   macro avg     0.9043    0.9052    0.9047      1000
+weighted avg     0.9052    0.9050    0.9050      1000
+
+
+-----------Streaming level-----------
+              precision    recall  f1-score   support
+
+           0     0.9163    0.8908    0.9034       467
+           1     0.9066    0.9287    0.9175       533
+
+    accuracy                         0.9110      1000
+   macro avg     0.9114    0.9097    0.9104      1000
+weighted avg     0.9111    0.9110    0.9109      1000
+```
+
+### 实验记录
+
+- Source train cache：9000/9000，构建完成。
+- Target test cache：1000/1000，复用已有缓存。
+- 训练与评测正常完成。
+- Checkpoint：`checkpoints/fig3_target_qwen3_8b_source_qwen3_14b/model_epoch_0.pt`
+- Log：`logs/fig3_target_qwen3_8b_source_qwen3_14b_train.log`
+- Pipeline：`logs/fig3_target_qwen3_8b_source_qwen3_14b_pipeline.log`
