@@ -138,3 +138,67 @@ weighted avg     0.9408    0.9351    0.9370      1725
 - 梯度累积尾部：37934 = 1185 × 32 + 14，最后 14 条样本未触发 `optimizer.step()`，保持原实现。
 
 本次 Response-level F1 略高于论文结果，Streaming F1 低于论文结果 0.0157。
+
+---
+
+## Qwen3-14B + S-Eval
+
+### 实验配置
+
+与前述 Qwen3-8B + S-Eval 实验配置一致，仅替换底座模型及对应数据。
+
+- Base Model：Qwen3-14B
+- Dataset：StreamGuardBench v1 / S-Eval
+- Train / Test：9000 / 1000
+- Hidden Layer：20
+- Hidden Size：5120
+- Test：benign 485，harmful 515
+
+### 复现结果
+
+以下 F1 均为 harmful 类（label=1）。
+
+| Metric | 本次复现 | 论文 | 差值 |
+|---|---:|---:|---:|
+| Response-level F1 | **0.8955** | — | — |
+| Streaming F1 | **0.8971** | 0.9041 | -0.0070 |
+
+- Response accuracy：0.8910
+- Streaming accuracy：0.8910
+- 论文未单独报告该组合的 Response-level F1。
+
+### 原始评测输出
+
+```text
+-------------Response level--------
+              precision    recall  f1-score   support
+
+           0     0.8983    0.8742    0.8861       485
+           1     0.8845    0.9068    0.8955       515
+
+    accuracy                         0.8910      1000
+   macro avg     0.8914    0.8905    0.8908      1000
+weighted avg     0.8912    0.8910    0.8909      1000
+
+
+-----------Streaming level-----------
+              precision    recall  f1-score   support
+
+           0     0.9123    0.8577    0.8842       485
+           1     0.8732    0.9223    0.8971       515
+
+    accuracy                         0.8910      1000
+   macro avg     0.8927    0.8900    0.8906      1000
+weighted avg     0.8921    0.8910    0.8908      1000
+```
+
+### 实验记录
+
+- 训练及测试缓存构建完成。
+- 训练与评测正常完成。
+- Checkpoint：`checkpoints/qwen3_14b_seval/model_epoch_0.pt`
+- Log：`logs/qwen3_14b_seval_train.log`
+- 完整流程日志：`logs/qwen3_14b_seval_pipeline.log`
+- 梯度累积尾部：9000 = 281 × 32 + 8，沿用原始实现。
+
+本次 Streaming F1 比论文低 0.0070，相比旧服务器复现结果 0.8748 提高 0.0223。
