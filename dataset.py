@@ -142,7 +142,7 @@ class SafetyDataset(Dataset):
                 # assistant_start = user_to_assistant_pos + len(self.user_prompt_marker)
                 #assistant_ids = tokenizer.encode(self.assistant_tokens)
                 #assistant_start = find_sequence(model_inputs.input_ids[0].tolist(), assistant_ids) + len(assistant_ids)
-                if self.model_name == "meta-llama/Llama-3.1-8B-Instruct":
+                if self.model_name == MODEL_CONFIGS["llama_3_1_8b"]["model_name"]:
                     # Llama tokenizer.encode() 默认会添加 BOS，
                     # 因此只在 Llama 路径禁用额外 special tokens。
                     assistant_ids = tokenizer.encode(
@@ -182,7 +182,7 @@ class SafetyDataset(Dataset):
                 #labels[:, -self.num_supervised_token:] = torch.tensor([label], device=self.device).unsqueeze(1).expand(-1, self.num_supervised_token)
                 
                 labels = torch.full((1, seq_len), -100, dtype=torch.long, device=self.device)
-                if self.model_name == "meta-llama/Llama-3.1-8B-Instruct" and seq_len < self.num_supervised_token:
+                if self.model_name == MODEL_CONFIGS["llama_3_1_8b"]["model_name"] and seq_len < self.num_supervised_token:
                     effective_n = seq_len
 
                     labels[:, :effective_n] = 0

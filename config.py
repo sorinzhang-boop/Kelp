@@ -3,19 +3,19 @@ ACTIVE_MODEL = "llama_3_1_8b"
 
 MODEL_CONFIGS = {
     "qwen3_8b": {
-        "model_name": "Qwen/Qwen3-8B",
+        "model_name": "/data/users/guard_g22/plugguard_repro/models/Qwen3-8B",
         "idx_layer": 20,
         "assistant_tokens": "<|im_start|>assistant\n",
     },
 
     "qwen3_14b": {
-        "model_name": "Qwen/Qwen3-14B",
+        "model_name": "/data/users/guard_g22/plugguard_repro/models/Qwen3-14B",
         "idx_layer": 20,
         "assistant_tokens": "<|im_start|>assistant\n",
     },
 
     "llama_3_1_8b": {
-        "model_name": "meta-llama/Llama-3.1-8B-Instruct",
+        "model_name": "/data/users/guard_g22/plugguard_repro/models/Meta-Llama-3.1-8B-Instruct",
         "idx_layer": 20,
         "assistant_tokens": "<|start_header_id|>assistant<|end_header_id|>\n\n",
     },
