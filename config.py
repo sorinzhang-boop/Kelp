@@ -1,4 +1,4 @@
-ACTIVE_MODEL = "llama_3_1_8b"
+ACTIVE_MODEL = "qwen3_8b"
 
 
 MODEL_CONFIGS = {
