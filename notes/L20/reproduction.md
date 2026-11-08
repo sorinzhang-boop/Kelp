@@ -337,3 +337,298 @@ weighted avg     0.9111    0.9110    0.9109      1000
 - Checkpoint：`checkpoints/fig3_target_qwen3_8b_source_qwen3_14b/model_epoch_0.pt`
 - Log：`logs/fig3_target_qwen3_8b_source_qwen3_14b_train.log`
 - Pipeline：`logs/fig3_target_qwen3_8b_source_qwen3_14b_pipeline.log`
+
+---
+
+## Figure 3 Cross-model Transfer：Llama-3.1-8B → Qwen3-8B
+
+### 实验设置
+
+复现 Figure 3 第一行第三列：
+
+- Source Model：Llama-3.1-8B-Instruct
+- Target Model：Qwen3-8B
+- Dataset：S-Eval
+- Hidden Layer：20
+- Train：Llama-3.1-8B S-Eval trainset（9000）
+- Test：Qwen3-8B S-Eval testset（1000）
+- 使用 Qwen3-8B 提取训练和测试 hidden states，重新训练 PlugGuard，其余参数与 baseline 一致。
+
+### 复现结果
+
+| Metric | Reproduction | Paper |
+|---|---:|---:|
+| Response-level F1 (label=1) | **0.8960** | — |
+| Streaming F1 (label=1) | **0.8960** | 0.8783 |
+
+- Response accuracy：0.8890
+- Streaming accuracy：0.8790
+- Streaming F1 比论文高 0.0177。
+
+### 原始评测输出
+
+```text
+-------------Response level--------
+              precision    recall  f1-score   support
+
+           0     0.8820    0.8801    0.8810       467
+           1     0.8951    0.8968    0.8960       533
+
+    accuracy                         0.8890      1000
+   macro avg     0.8886    0.8884    0.8885      1000
+weighted avg     0.8890    0.8890    0.8890      1000
+
+
+-----------Streaming level-----------
+              precision    recall  f1-score   support
+
+           0     0.9676    0.7666    0.8554       467
+           1     0.8270    0.9775    0.8960       533
+
+    accuracy                         0.8790      1000
+   macro avg     0.8973    0.8720    0.8757      1000
+weighted avg     0.8926    0.8790    0.8770      1000
+```
+
+### 实验记录
+
+- Source train cache：9000/9000；Target test cache：1000/1000（复用）。
+- 训练与评测完成。
+- Checkpoint：`checkpoints/fig3_target_qwen3_8b_source_llama_3_1_8b/model_epoch_0.pt`
+- Log：`logs/fig3_target_qwen3_8b_source_llama_3_1_8b_train.log`
+
+---
+
+## Figure 3 Cross-model Transfer：Qwen3-8B → Qwen3-14B
+
+### 实验设置
+
+复现 Figure 3 第二行第一列：
+
+- Source Model：Qwen3-8B
+- Target Model：Qwen3-14B
+- Dataset：S-Eval
+- Hidden Layer：20
+- Train：Qwen3-8B S-Eval trainset（9000）
+- Test：Qwen3-14B S-Eval testset（1000）
+- 使用 Qwen3-14B 提取训练和测试 hidden states，重新训练 PlugGuard，其余参数与 baseline 一致。
+
+### 复现结果
+
+| Metric | Reproduction | Paper |
+|---|---:|---:|
+| Response-level F1 (label=1) | **0.8796** | — |
+| Streaming F1 (label=1) | **0.8844** | 0.8827 |
+
+- Response accuracy：0.8760
+- Streaming accuracy：0.8790
+- Streaming F1 比论文高 0.0017。
+
+### 原始评测输出
+
+```text
+-------------Response level--------
+              precision    recall  f1-score   support
+
+           0     0.8722    0.8722    0.8722       485
+           1     0.8796    0.8796    0.8796       515
+
+    accuracy                         0.8760      1000
+   macro avg     0.8759    0.8759    0.8759      1000
+weighted avg     0.8760    0.8760    0.8760      1000
+
+
+-----------Streaming level-----------
+              precision    recall  f1-score   support
+
+           0     0.8889    0.8577    0.8730       485
+           1     0.8703    0.8990    0.8844       515
+
+    accuracy                         0.8790      1000
+   macro avg     0.8796    0.8784    0.8787      1000
+weighted avg     0.8793    0.8790    0.8789      1000
+```
+
+### 实验记录
+
+- Source train cache：9000/9000；Target test cache：1000/1000（复用）。
+- 训练与评测完成。
+- Checkpoint：`checkpoints/fig3_target_qwen3_14b_source_qwen3_8b/model_epoch_0.pt`
+- Log：`logs/fig3_target_qwen3_14b_source_qwen3_8b_train.log`
+
+---
+
+## Figure 3 Cross-model Transfer：Llama-3.1-8B → Qwen3-14B
+
+### 实验设置
+
+复现 Figure 3 第二行第三列：
+
+- Source Model：Llama-3.1-8B-Instruct
+- Target Model：Qwen3-14B
+- Dataset：S-Eval
+- Hidden Layer：20
+- Train：Llama-3.1-8B S-Eval trainset（9000）
+- Test：Qwen3-14B S-Eval testset（1000）
+- 使用 Qwen3-14B 提取训练和测试 hidden states，重新训练 PlugGuard，其余参数与 baseline 一致。
+
+### 复现结果
+
+| Metric | Reproduction | Paper |
+|---|---:|---:|
+| Response-level F1 (label=1) | **0.8616** | — |
+| Streaming F1 (label=1) | **0.8294** | 0.8171 |
+
+- Response accuracy：0.8410
+- Streaming accuracy：0.7910
+- Streaming F1 比论文高 0.0123。
+
+### 原始评测输出
+
+```text
+-------------Response level--------
+              precision    recall  f1-score   support
+
+           0     0.9454    0.7134    0.8132       485
+           1     0.7808    0.9612    0.8616       515
+
+    accuracy                         0.8410      1000
+   macro avg     0.8631    0.8373    0.8374      1000
+weighted avg     0.8606    0.8410    0.8381      1000
+
+
+-----------Streaming level-----------
+              precision    recall  f1-score   support
+
+           0     0.9759    0.5835    0.7303       485
+           1     0.7155    0.9864    0.8294       515
+
+    accuracy                         0.7910      1000
+   macro avg     0.8457    0.7850    0.7799      1000
+weighted avg     0.8418    0.7910    0.7813      1000
+```
+
+### 实验记录
+
+- Source train cache：9000/9000；Target test cache：1000/1000（复用）。
+- 训练与评测完成。
+- Checkpoint：`checkpoints/fig3_target_qwen3_14b_source_llama_3_1_8b/model_epoch_0.pt`
+- Log：`logs/fig3_target_qwen3_14b_source_llama_3_1_8b_train.log`
+
+---
+
+## Figure 3 Cross-model Transfer：Qwen3-8B → Llama-3.1-8B
+
+### 实验设置
+
+复现 Figure 3 第三行第一列：
+
+- Source Model：Qwen3-8B
+- Target Model：Llama-3.1-8B-Instruct
+- Dataset：S-Eval
+- Hidden Layer：20
+- Train：Qwen3-8B S-Eval trainset（9000）
+- Test：Llama-3.1-8B S-Eval testset（1000）
+- 使用 Llama-3.1-8B 提取训练和测试 hidden states，重新训练 PlugGuard，其余参数与 baseline 一致。
+
+### 复现结果
+
+| Metric | Reproduction | Paper |
+|---|---:|---:|
+| Response-level F1 (label=1) | **0.8010** | — |
+| Streaming F1 (label=1) | **0.8947** | 0.8966 |
+
+- Response accuracy：0.8470
+- Streaming accuracy：0.9080
+- Streaming F1 比论文低 0.0019。
+
+### 原始评测输出
+
+```text
+-------------Response level--------
+              precision    recall  f1-score   support
+
+           0     0.7880    0.9854    0.8757       547
+           1     0.9747    0.6799    0.8010       453
+
+    accuracy                         0.8470      1000
+   macro avg     0.8813    0.8326    0.8384      1000
+weighted avg     0.8726    0.8470    0.8419      1000
+
+
+-----------Streaming level-----------
+              precision    recall  f1-score   support
+
+           0     0.8929    0.9452    0.9183       547
+           1     0.9287    0.8631    0.8947       453
+
+    accuracy                         0.9080      1000
+   macro avg     0.9108    0.9041    0.9065      1000
+weighted avg     0.9091    0.9080    0.9076      1000
+```
+
+### 实验记录
+
+- Source train cache：9000/9000；Target test cache：1000/1000（复用）。
+- 训练与评测完成。
+- Checkpoint：`checkpoints/fig3_target_llama_3_1_8b_source_qwen3_8b/model_epoch_0.pt`
+- Log：`logs/fig3_target_llama_3_1_8b_source_qwen3_8b_train.log`
+
+---
+
+## Figure 3 Cross-model Transfer：Qwen3-14B → Llama-3.1-8B
+
+### 实验设置
+
+复现 Figure 3 第三行第二列：
+
+- Source Model：Qwen3-14B
+- Target Model：Llama-3.1-8B-Instruct
+- Dataset：S-Eval
+- Hidden Layer：20
+- Train：Qwen3-14B S-Eval trainset（9000）
+- Test：Llama-3.1-8B S-Eval testset（1000）
+- 使用 Llama-3.1-8B 提取训练和测试 hidden states，重新训练 PlugGuard，其余参数与 baseline 一致。
+
+### 复现结果
+
+| Metric | Reproduction | Paper |
+|---|---:|---:|
+| Response-level F1 (label=1) | **0.7895** | — |
+| Streaming F1 (label=1) | **0.8966** | 0.9046 |
+
+- Response accuracy：0.8390
+- Streaming accuracy：0.9100
+- Streaming F1 比论文低 0.0080。
+
+### 原始评测输出
+
+```text
+-------------Response level--------
+              precision    recall  f1-score   support
+
+           0     0.7805    0.9817    0.8696       547
+           1     0.9679    0.6667    0.7895       453
+
+    accuracy                         0.8390      1000
+   macro avg     0.8742    0.8242    0.8296      1000
+weighted avg     0.8654    0.8390    0.8334      1000
+
+
+-----------Streaming level-----------
+              precision    recall  f1-score   support
+
+           0     0.8919    0.9506    0.9204       547
+           1     0.9353    0.8609    0.8966       453
+
+    accuracy                         0.9100      1000
+   macro avg     0.9136    0.9058    0.9085      1000
+weighted avg     0.9116    0.9100    0.9096      1000
+```
+
+### 实验记录
+
+- Source train cache：9000/9000；Target test cache：1000/1000（复用）。
+- 训练与评测完成。
+- Checkpoint：`checkpoints/fig3_target_llama_3_1_8b_source_qwen3_14b/model_epoch_0.pt`
+- Log：`logs/fig3_target_llama_3_1_8b_source_qwen3_14b_train.log`
