@@ -222,3 +222,126 @@ grep -E '^== |DISTINCT paired positions' token_audit_unique.log
 ```
 
 该审计提供的是**训练样本位置抽样及边界匹配的数量证据**，不是新的 Adapter checkpoint 或新的 Response/Streaming F1 实验结果。
+
+---
+
+## 实验四：Qwen3-14B → Qwen3-8B 的 Token 对齐协议消融（P0 / P1 / P2）
+
+### 1. 实验目的与控制变量
+
+实验三发现，实验一和实验二不仅使用不同底座模型，也采用不同的训练 token 选择与测试序列映射协议。实验四在 **Qwen3-14B → Qwen3-8B** 这一固定迁移任务上，比较三种协议，检查这些实现选择对冻结围栏的检测性能有多大影响。
+
+- **固定条件**：StreamGuardBench v1 / S-Eval；14B 与 8B 均取 Layer 20（5120D → 4096D）；`torch.nn.Linear(5120, 4096, bias=True)`；归一化 MSE；训练/验证 8100/900，`seed=42`，3 Epoch，AdamW，`lr=3e-4`，权重衰减 0，梯度累积 8，每样本最多 128 对 token；冻结 `checkpoints/qwen3_8b_seval/model_epoch_0.pt`。使用 GPU 0，复用已有 hidden-state 缓存，不重新生成 Response，也不重新训练 Safety Head。
+- **训练数据与测试数据**：B 用 **14B Train** 训练、**14B Test** 评测；E/F 共用用 **8B Train** 训练的 Adapter，E 测 **8B Test**，F 测 **14B Test**。C 在 14B Test 上直接使用真实 8B hidden states，不通过 Adapter，作为一致性基线。
+- **指标**：Response-level F1 取 `pred[-2]`，Streaming F1 取 `max(pred)`（只要任一响应 token 预测为 harmful 即判 harmful）；下表 F1 均针对 harmful（label=1），测试集均为 1000 条，属于**已有完整 Response 上的离线评测**。
+
+| 协议 | Adapter 的训练 token 对 | 测试时输入冻结 8B 围栏的表征 | 与原实验的关系 |
+|---|---|---|---|
+| **P0：原始 INDEX** | 14B 与 8B 按 token 下标直接配对；包含 chat template／特殊 token | 14B 原始 hidden-state 序列经 Adapter 映射，保持原 token 下标 | **实验一已有结果**，本次不重跑 |
+| **P1：内容 token 训练** | 仅用同一角色、相同相对字符结束位置精确匹配的内容 token；排除模板／特殊 token | 仍使用**原始 14B hidden-state 序列**经新 Adapter 映射 | **重新训练 B 和 E/F 两个 Adapter**，评测 B/E/F |
+| **P2：字符映射测试** | **完全复用 P1 训练好的 Adapter**，不再训练 | 先按字符边界建立 `src_for_qwen`，将 14B hidden states 重排／回填至 8B token 坐标，再送入同一 Adapter 和围栏 | 与 P1 **只改变测试输入构造**，评测 B/E/F |
+
+**比较边界**：P0 → P1 不只是删除特殊 token，还改变了候选 token 池、随机抽样和归一化统计使用的样本位置，故不能把差异归因于单一因素；P1 → P2 共用**完全相同的 Adapter checkpoint**，其差异更直接对应测试时输入映射的改变。C 不参与 Adapter 训练，其 P1/P2 列只是重复展示本次重新核验的 C 结果。
+
+### 2. P0 / P1 / P2 全部评测结果
+
+| 实验 | P0 Response F1 | P0 Streaming F1 | P1 Response F1 | P1 Streaming F1 | P2 Response F1 | P2 Streaming F1 |
+|---|---:|---:|---:|---:|---:|---:|
+| **B**（14B Train → 14B Test） | 0.8182 | 0.8054 | **0.8931** | **0.8796** | 0.8705 | 0.8757 |
+| **C**（真实 8B 表征，14B Test） | 0.9080 | 0.9007 | 0.9080 | 0.9007 | 0.9080 | 0.9007 |
+| **E**（8B Train → 8B Test） | 0.8247 | 0.8310 | 0.8382 | 0.8338 | **0.8577** | **0.8731** |
+| **F**（8B Train → 14B Test） | 0.8121 | 0.8119 | 0.8133 | 0.7959 | **0.8319** | **0.8481** |
+
+**结果来源**：P0 均抄录自实验一，并非本次重新执行；P1、P2 为实验四实测；C 本次重新执行并得到 Response F1 = `0.9080`、Streaming F1 = `0.9007`，日志显示 `C CONSISTENCY PASSED vs experiment-1 reference`。
+
+为便于比较，下表的正负号表示 **Streaming F1 差值（百分点，pp）**，不是相对百分比：
+
+| 实验 | P1 − P0 | P2 − P1 | P2 − P0 |
+|---|---:|---:|---:|
+| B | **+7.42 pp** | −0.39 pp | +7.03 pp |
+| C | 0.00 pp | 0.00 pp | 0.00 pp |
+| E | +0.28 pp | **+3.93 pp** | +4.21 pp |
+| F | −1.60 pp | **+5.22 pp** | +3.62 pp |
+
+- **B**：P1 比 P0 的 Streaming F1 提高 7.42 pp；P2 略低于 P1。改变训练 token 池后，14B Train 场景的表现明显变化。
+- **E**：P1 相对 P0 变化很小，P2 在同一个 Adapter 上比 P1 高 3.93 pp。
+- **F（主要迁移场景）**：P1 的 Streaming F1 为 **0.7959**，低于 P0 的 **0.8119**；保持 P1 Adapter 不变，改为 P2 评测后提高到 **0.8481**（比 P1 高 5.22 pp，比 P0 高 3.62 pp）。与 C 的 **0.9007** 仍相差 **5.26 pp**，相比 P0 与 C 的 **8.88 pp** 差距有所缩小。
+- **C**：本次复核结果与实验一一致，说明同一 14B Test 上的真实 8B 表征诊断基线保持稳定；它不单独证明所有映射索引的合理性。
+
+### 3. Tokenizer 与字符映射审计
+
+#### 3.1 内容 token 精确匹配率与 Token ID 检查
+
+实验四针对四个数据划分构建了字符映射索引，逐样本核对 14B／8B 缓存长度、`assistant_start`，并重新对比两模型的 token ID。`exact` 只统计 prompt/response 的**内容 token**，不含模板与特殊 token。
+
+| 数据划分 | 样本数 | 精确匹配内容 token | 内容 token 覆盖率 | P2 映射后下标改变数（`grid_rewrites`） | 非精确内容位置的改变（`non_exact_rewrites`） | Token ID 不一致 |
+|---|---:|---:|---:|---:|---:|---:|
+| `qwen14_train` | 9000 | 5,102,465 / 5,102,465 | **100.00%** | 98,036 | 90,000 | **0** |
+| `qwen14_test` | 1000 | 616,596 / 616,596 | **100.00%** | 11,369 | 10,000 | **0** |
+| `qwen8_train` | 9000 | 5,220,564 / 5,220,564 | **100.00%** | 102,490 | 90,000 | **0** |
+| `qwen8_test` | 1000 | 649,965 / 649,965 | **100.00%** | 11,891 | 10,000 | **0** |
+
+**判断**：本次所用全部样本的 Qwen3-14B／Qwen3-8B token ID 相同，内容 token 的字符结束位置也全部精确匹配；因此实验一的按下标配对在**当前样本集的 token 坐标层面**有依据，P2 不是为修复这两套 Qwen tokenizer 的大规模错位。尽管如此，P2 的回填／索引选择仍然改变了部分位置，不能认为“100% 匹配”就意味着 P1/P2 输入完全一致。
+
+#### 3.2 P2 评测时实际改变了多少输入位置
+
+| 评测组 | Test 数据 | 序列位置总数 | P2 相对 P1 改变的来源索引 | 改变比例 | 其中属于精确匹配内容 token 的改变 | 其他位置的改变 |
+|---|---|---:|---:|---:|---:|---:|
+| **B / F** | 14B Test | 628,596 | 11,369 | **1.81%** | 1,369 | 10,000 |
+| **E** | 8B Test | 661,965 | 11,891 | **1.80%** | 1,891 | 10,000 |
+
+这里的“改变”严格指 `src_for_qwen[j] != j`，即**选择了不同的源 hidden-state 下标**；它不是数值变化的范数，也不能直接等同于特殊 token 的数量。`non_exact_rewrites` 包含所有不属于精确匹配内容 token 集合的改动，需要区分模板、分隔符、未纳入内容集合的位置等来源。
+
+进一步的索引方向检查（仅为定位映射行为）：
+
+| 评测 Test | 下标增大 `src[j] > j` | 其中 Response 阶段 | 下标减小 `src[j] < j` | Response 阶段全部改变 |
+|---|---:|---:|---:|---:|
+| 14B Test | 7,369 | 1,369 | 4,000 | 5,369 |
+| 8B Test | 7,891 | 1,891 | 4,000 | 5,891 |
+
+这些数字仅说明**离线测试时构造的表征序列采用了不同的源位置**；不能仅凭 token 下标大小，就认定训练违规、评测无效或某种性能提升来自信息泄漏。本次研究报告的是完整已知 Response 上的离线 Response/Streaming F1；若将来讨论逐 token 在线部署，需要另外定义并验证在线可用性，不能与本次离线实验混为一谈。
+
+### 4. P1 → P2 的逐样本预测变化
+
+P1、P2 **使用同一 Adapter**，但 P2 改变了约 1.8% 的源表征索引。对同一测试集逐样本比较 `predictions_*.csv` 得到：
+
+| 实验 | Response-level 预测改变（1000 条中） | Streaming-level 预测改变（1000 条中） | Streaming F1：P1 → P2 |
+|---|---:|---:|---:|
+| **B** | **34**（3.4%） | **5**（0.5%） | 0.8796 → 0.8757 |
+| **E** | **73**（7.3%） | **123**（12.3%） | 0.8338 → 0.8731 |
+| **F** | **95**（9.5%） | **148**（14.8%） | 0.7959 → 0.8481 |
+
+说明输入端仅有约 1.8% 的索引发生改变，但 E/F 的完整序列判别结果受到明显影响。这与围栏包含跨 token 注意力和时序状态传播的实现相容，但**本次统计尚未分离**不同位置类型的独立贡献，也未统计每次翻转对 Precision／Recall 的方向性影响。不能据此断定“特殊 token 回填”是唯一原因。
+
+### 5. 阶段性结论与实验边界
+
+1. **对齐协议是一个实证上重要的控制变量**。在完全相同的 Qwen3-14B → Qwen3-8B 迁移任务上，B 的 P0 → P1 Streaming F1 提高 **7.42 pp**；F 的 P1 → P2 提高 **5.22 pp**。不能把实验一和实验二的绝对 F1 差异全归因于模型表征可对齐性。
+2. **效果依赖训练 Response 来源，不能统一概括为 P2 更优**。B 的 P1（0.8796）优于 P2（0.8757）；E/F 则 P2 优于 P1。对于 F，单独改变训练 token 池的 P1 反而低于 P0。
+3. **P2 改动少、预测改变多，但原因尚未拆解**：内容 token 在当前 Qwen 数据上 100% 精确匹配，P2 仍更改约 1.8% 的来源索引，并改变 E/F 约 12%～15% 的 Streaming 判定。当前只能确认不同序列构造方式与 F1 变化存在对应关系，尚不能给出更细的机制归因。
+4. **与 Llama 结果的比较仍受测试集和协议混杂影响**。Llama 实验 F 的 Streaming F1 为 0.9199，而本实验 Qwen3-14B 的 F-P2 为 0.8481；两者测试 Response 来源不同，不宜直接解读为两个模型线性表征迁移难度的严格排序。
+5. **统计与评测局限**：本次尚无多随机种子、置信区间或逐样本 Precision/Recall 翻转分析；P0 数值来自历史实验；本次没有重新生成 Response，也未测试 MLP／MATCHA。**不将 P2 的索引方向统计直接作为离线实验有效性判定。**
+
+### 6. 代码、Checkpoint、结果与复现方式
+
+以下路径均相对于 `~/plugguard_repro/`：
+
+| 类型 | 路径／内容 |
+|---|---|
+| 主代码 | `Kelp/exp4_qwen14_token_alignment_ablation.py` |
+| 自动运行入口 | `Kelp/run_exp4_qwen14_token_alignment.sh` |
+| 日志 | `logs/exp4_qwen14_token_alignment.log` |
+| 字符索引缓存 | `data/qwen14_qwen8_char_alignment_l20/{qwen14_train,qwen14_test,qwen8_train,qwen8_test}/sample_XXXXXXXX.pt` |
+| P1/P2 的 B Adapter | `checkpoints/exp4_qwen14_to_qwen8_alignment_ablation/train_on_qwen14/affine_best.pt` |
+| P1/P2 的 E、F 共用 Adapter | `checkpoints/exp4_qwen14_to_qwen8_alignment_ablation/train_on_qwen8/affine_best.pt` |
+| F1 与 Accuracy | `checkpoints/exp4_qwen14_to_qwen8_alignment_ablation/metrics_{b,e,f}_{p1,p2}.json`、`metrics_c.json` |
+| 逐样本预测 | 同上目录的 `predictions_{b,e,f}_{p1,p2}.csv`、`predictions_c.csv` |
+
+历史 P0 的 Adapter 和结果文件仍保存在**实验一**原路径，实验四没有覆盖它们。实验四执行完毕，运行日志结尾为 `=== ALL EXPERIMENT 4 STEPS COMPLETE ===`。
+
+无需重跑训练，可在服务器的 `Kelp/` 目录直接复核结果汇总：
+
+```bash
+python exp4_qwen14_token_alignment_ablation.py --mode report
+```
+
+**实验四已完成并记录**；后续若要讨论机制，可单独做特定位置类型的消融，但不作为本次实验四已有结论或必要补跑条件。
