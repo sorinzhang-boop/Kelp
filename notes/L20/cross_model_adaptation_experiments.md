@@ -113,7 +113,7 @@ Qwen3-14B 与 Qwen3-8B 在上一轮抽样审计中 token ID 和位置一致，�
 3. **测试 Adapter：以 Qwen3-8B token 坐标为准**。遍历 Qwen3-8B 的 token 位置，选取字符结束位置**不晚于当前 Qwen token**的、最近一个**已完成**的 Llama token hidden state；若当前 response 尚无已完成的 Llama 内容 token，则使用 Llama 的 assistant 前缀末状态。对其他特殊 token／角色头使用脚本规定的前缀状态回填。这样得到与 Qwen3-8B 相同长度的 4096D 映射输入。
 4. **围栏评测**：使用 Qwen3-8B 的 `assistant_start`、token 序列长度和标签位置运行冻结围栏；C 直接输入相同 Qwen token 坐标下的真实 8B 表征。**响应内容 token 的对齐不读取未来才完成的 Llama token**，但这仍是基于完整已知 Response 的**离线 Streaming F1 模拟**，不是严格在线部署的时延证明。
 
-代码为每条样本缓存 `src_for_qwen`（测试时的索引映射）、`exact_qwen` / `exact_llama`（训练时的精确配对），并在日志中输出各数据划分的 `exact-boundary coverage`。精确匹配率的具体数值需从运行日志补录，不能假定为 100%。
+代码为每条样本缓存 `src_for_qwen`（测试时的索引映射）、`exact_qwen` / `exact_llama`（训练时的精确配对），并在日志中输出各数据划分的 `exact-boundary coverage`。精确字符边界匹配率的实际统计见**实验三**；该比例不等于 token ID 一致率，也不能替代逐 token 对齐正确性检查。
 
 | 训练参数 | B / E、F 共用配置 |
 |---|---|
@@ -145,3 +145,80 @@ E/F 最优 Adapter：**epoch 3，验证 normalized MSE = 0.51734097**。B 的最
 - B/C/E/F 的 `metrics_*.json`、`predictions_*.csv` 保存在 `checkpoints/adapter_llama3_1_8b_to_qwen3_8b_layer20/` 根目录。
 - token 对齐索引缓存：`data/llama_qwen8_char_alignment_l20/{llama_train,llama_test,qwen_train,qwen_test}/`。
 - **自动运行入口**：`Kelp/run_affine_llama_bcef.sh`；在 `Kelp` 目录执行 `bash run_affine_llama_bcef.sh`，顺序完成 B → C → E → F。
+
+---
+
+## 实验三：Adapter 训练 Token 对数量与对齐覆盖率审计
+
+### 1. 审计目的与统计口径
+
+本实验是对**实验一（Qwen3-14B → Qwen3-8B）和实验二（Llama-3.1-8B → Qwen3-8B）已完成训练的只读审计**，不重新训练 Adapter，也不重新评测 Safety Head。目的是核实：两种 token 配对协议下，真正能够进入归一化 MSE 的候选 token 对有多少，以及训练 3 个 Epoch 实际抽取过多少不同位置对。
+
+- **工具与数据**：`Kelp/audit_adapter_token_pairs.py`；读取现有 hidden-state 缓存及 Llama 字符对齐索引缓存；无需 GPU。
+- **统计配置**：`seed=42`，每种训练 Response 均为 9000 条，其中 Train 8100 / Validation 900；每样本最多抽取 128 对，训练 3 Epoch；归一化统计使用训练子集前 320 条。
+- **INDEX（实验一）**：Qwen3-14B 和 Qwen3-8B 按相同 token 下标配对；候选位置**包含 chat template／特殊 token**。
+- **EXACT（实验二）**：Llama 与 Qwen3-8B 按相同角色内、相同相对字符结束位置精确配对；仅统计**内容 token**，排除模板／特殊 token。
+- **累计使用量**：3 Epoch 中每次抽到的 token 对均计一次，允许不同 Epoch 重复抽中。
+- **去重数量**：对同一训练样本，把 3 Epoch 抽中的 **Qwen3-8B token 位置索引**取并集，再跨样本求和；是不同的**样本－位置对**数量，**不是**去重后的词表 token 或文本内容。抽样轨迹由训练脚本一致的种子与选择函数重建，并非训练时单独持久化的逐步记录。
+
+### 2. 四种 Adapter 训练设置的数量统计
+
+| 模型迁移方向 | 训练 Response（对应实验） | Train 候选对（8100 条） | 每 Epoch 实际抽取 | 3 Epoch 累计抽取 | 3 Epoch 去重 | 去重 / 累计 |
+|---|---|---:|---:|---:|---:|---:|
+| Qwen3-14B → 8B | 14B Train（B） | 4,686,881 | 1,023,752 | 3,071,256 | 2,002,598 | 65.20% |
+| Qwen3-14B → 8B | 8B Train（E/F） | 4,792,878 | 1,025,330 | 3,075,990 | 1,986,770 | 64.59% |
+| Llama → 8B | Llama Train（B） | 2,262,223 | **686,963** | 2,060,889 | **1,250,653** | 60.69% |
+| Llama → 8B | 8B Train（E/F） | 4,661,962 | 1,015,354 | 3,046,062 | 1,980,889 | 65.03% |
+
+每 Epoch 的理论抽取上限为 `8100 × 128 = 1,036,800` 对。实际抽取量占上限的比例依次为 **98.74%、98.89%、66.26%、97.93%**；对应平均每条训练样本抽取 **126.39、126.58、84.81、125.35** 对。达不到上限主要是部分样本可选位置不足，尤其抽样还受 prompt/response 配额限制。
+
+**进一步拆分（每 Epoch）：**
+
+| 训练设置 | Prompt／前缀侧抽取 | Response 侧抽取 | Validation 每次评测抽取 | 归一化统计（320 条）抽取 |
+|---|---:|---:|---:|---:|
+| Qwen3-14B / B | 234,631 | 789,121 | 113,781 | 40,282 |
+| Qwen3-14B / E/F | 234,631 | 790,699 | 114,082 | 40,362 |
+| Llama / B | 184,755 | 502,208 | 76,368 | 27,369 |
+| Llama / E/F | 184,755 | 830,599 | 113,081 | 39,974 |
+
+> 表中的“Prompt／前缀侧”口径不同：INDEX 包含模板／特殊 token；EXACT 只包含通过边界匹配的内容 token。因此两类方法的总量和构成不能直接视为完全同质的训练信息。
+
+### 3. 字符边界匹配覆盖率
+
+实验二的 EXACT 对齐以 **Qwen3-8B 内容 token 位置**为分母。定义：
+
+```text
+Exact-boundary coverage = 精确匹配的 Qwen 内容 token 位置数 / Qwen 内容 token 位置总数
+```
+
+| 配对数据（9000 条 Train Response 来源） | Qwen 内容 token 位置 | 精确边界配对位置 | 覆盖率 |
+|---|---:|---:|---:|
+| Llama Train | 2,531,326 | 2,509,603 | **99.14%** |
+| Qwen3-8B Train | 5,220,564 | 5,183,189 | **99.28%** |
+
+这表示在**当前对齐索引和边界定义下**，大多数 Qwen 内容 token 的结束字符位置都能匹配到 Llama 内容 token 的结束位置；不意味着两模型的 token ID、切分起点或语义单位有 99% 相同，也**尚未验证索引构造在所有样本上的正确性**。后续应抽取真实 token 文本、字符区间及配对索引人工核验。
+
+另外，审计脚本 EXACT 模式打印的 `source-token positions` 对应映射缓存中的 `num_qwen`（Qwen 坐标网格长度），**不是 Llama tokenizer 的 token 总数**；解释日志时应以 `Qwen content-token positions` 和 `eligible paired positions` 计算上述覆盖率。
+
+### 4. 当前发现与尚不能得出的结论
+
+1. **实验二 B 与 F 的训练数据规模不同**：Llama / B 每 Epoch 抽取 686,963 对，而 Llama / E/F 抽取 1,015,354 对；前者少 **32.34%**。跨 3 Epoch 去重数量分别为 1,250,653 与 1,980,889，前者少 **36.86%**。两组使用不同来源的 Response，不能单独把 F1 差异归因为 token 数量。
+2. **两轮 F 的训练 token 对数量接近，评测 F1 却相差明显**：Qwen3-14B / E/F 与 Llama / E/F 的去重位置对分别为 **1,986,770** 和 **1,980,889**，仅差 **5,881 对（约 0.30%）**；但各自 F 的 Streaming F1 分别为 **0.8119** 和 **0.9199**，相差 **10.80 个百分点**。因此，单靠抽取数量不能解释该性能差异。
+3. **尚存在重要混杂因素**：两轮 F 使用不同的新模型 Response 测试集，且训练 token 选择协议不同（INDEX 含特殊 token；EXACT 排除特殊 token），同时模型表征本身和 token 长度分布也不同。因此不能据此直接认定 Llama 表征更易线性映射。
+4. **下一步**：先做边界匹配逐 token 正确性检查，再对 Qwen3-14B 进行受控协议消融：保持原始评测不变、仅改训练内容 token 筛选；然后单独检验测试端字符映射和特殊 token 回填的影响。复用原有围栏与缓存，另存 Adapter，不覆盖实验一 checkpoint。
+
+### 5. 审计代码与结果日志
+
+相对于 `~/plugguard_repro/`：
+
+- **脚本**：`Kelp/audit_adapter_token_pairs.py`（只读，不加载底座模型）。
+- **完整去重审计日志**：`Kelp/token_audit_unique.log`（用户执行 `--unique` 后已生成）。
+- **运行命令**：
+
+```bash
+cd ~/plugguard_repro/Kelp
+python audit_adapter_token_pairs.py --unique > token_audit_unique.log 2>&1
+grep -E '^== |DISTINCT paired positions' token_audit_unique.log
+```
+
+该审计提供的是**训练样本位置抽样及边界匹配的数量证据**，不是新的 Adapter checkpoint 或新的 Response/Streaming F1 实验结果。
