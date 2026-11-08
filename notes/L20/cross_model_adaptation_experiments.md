@@ -26,14 +26,14 @@
 - **输入/输出**：同一条 *prompt + response* 分别经过冻结的 14B、8B 提取成对 hidden states；训练时 14B 表征为输入、8B 表征为监督目标。按训练集统计的逐特征均值和标准差归一化；送入 8B 围栏前反归一化。
 - **损失函数：** 使用归一化 hidden states 的均方误差（MSE），不使用安全标签。
 
-$$
-\mathcal{L}_{\mathrm{align}}
-=
-\operatorname{MSE}\left(
-W\frac{h_{14B}-\mu_{14B}}{\sigma_{14B}}+b,\;
-\frac{h_{8B}-\mu_{8B}}{\sigma_{8B}}
-\right)
-$$
+```text
+h14_norm = (h14 - μ14) / σ14
+h8_norm  = (h8  - μ8)  / σ8
+
+h8_pred = W · h14_norm + b
+
+L_align = MSE(h8_pred, h8_norm)
+```
 
 
 | 训练参数 | B / E、F 共用配置 |
