@@ -24,12 +24,17 @@
 
 - **网络**：`torch.nn.Linear(5120, 4096, bias=True)`，约 **20.98M** 可训练参数。
 - **输入/输出**：同一条 *prompt + response* 分别经过冻结的 14B、8B 提取成对 hidden states；训练时 14B 表征为输入、8B 表征为监督目标。按训练集统计的逐特征均值和标准差归一化；送入 8B 围栏前反归一化。
-- **损失函数**：仅使用归一化 hidden states 的均方误差（MSE），**没有**使用安全标签、交叉熵、风险蒸馏或 MATCHA 多层注意力。
+- **损失函数：** 使用归一化 hidden states 的均方误差（MSE），不使用安全标签。
 
-\[
-\mathcal L_{\mathrm{align}}
-=\operatorname{MSE}\!\left( W\frac{h_{14}-\mu_{14}}{\sigma_{14}}+b,\ \frac{h_8-\mu_8}{\sigma_8}\right)
-\]
+$$
+\mathcal{L}_{\mathrm{align}}
+=
+\operatorname{MSE}\left(
+W\frac{h_{14B}-\mu_{14B}}{\sigma_{14B}}+b,\;
+\frac{h_{8B}-\mu_{8B}}{\sigma_{8B}}
+\right)
+$$
+
 
 | 训练参数 | B / E、F 共用配置 |
 |---|---|
