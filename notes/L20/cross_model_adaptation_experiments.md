@@ -470,31 +470,45 @@ python exp4_qwen14_token_alignment_ablation.py --mode report
 
 ### 1. 实验设置
 
-- **目的**：检查实验七、八中，使用冻结的 Llama-3.1-8B-Instruct Safety Head 时，Affine Adapter 的低 F1 是否对学习率敏感，并分析 Streaming-level 有害类别预测偏置。
-- **两个迁移方向**：`Qwen3-8B → Llama-3.1-8B-Instruct`（4096D → 4096D）与 `Qwen3-14B → Llama-3.1-8B-Instruct`（5120D → 4096D）。两者均冻结由 **Llama-3.1-8B-Instruct S-Eval Train（9000 条）**训练的原生 Safety Head。
-- **只重新训练 E/F 共用的 Adapter**：Adapter 训练 Response 为 **Llama-3.1-8B-Instruct S-Eval Train**（训练 8100／验证 900）；E 测 **Llama-3.1-8B-Instruct S-Eval Test**，F 分别测 **Qwen3-8B S-Eval Test**、**Qwen3-14B S-Eval Test**。不改变字符边界配对、Target（Llama）token 网格、归一化 MSE 或评测口径。
-- **控制变量**：`seed=42`、3 Epoch、AdamW、`weight_decay=0`、梯度累积 8、每样本最多 128 对、归一化统计前 320 条样本；仅扫描学习率 `5e-5`、`1e-4`、`2e-4`、`3e-4`、`5e-4`。其中 `3e-4` **直接复用实验七／八原结果**，其余四档每个迁移方向各训练一个 Adapter（共新增 8 次训练、16 次 E/F 评测）；采用物理 GPU 1 串行运行。
+- **目的**：检查迁移到冻结 Llama-3.1-8B-Instruct Safety Head 时，Affine Adapter 的 E/F F1 对学习率的敏感性，以及 Streaming-level harmful 预测偏置。
+- **迁移方向**：Qwen3-8B → Llama-3.1-8B-Instruct（4096D → 4096D）与 Qwen3-14B → Llama-3.1-8B-Instruct（5120D → 4096D）。两方向均复用由 **Llama-3.1-8B-Instruct S-Eval Train（9000 条）**训练的冻结 Safety Head。
+- **数据与评测**：只训练 E/F 共用的 Adapter，训练 Response 为 Llama-3.1-8B-Instruct S-Eval Train（8100 Train／900 Validation）；E 测 Llama S-Eval Test（453 harmful／547 benign），F 分别测 Qwen3-8B Test（533／467）与 Qwen3-14B Test（515／485），每个 Test 均为 1000 条。指标仍为 harmful（label=1）的 Response/Streaming 口径；本节主要报告 **Streaming F1**。
+- **固定参数**：`seed=42`、3 Epoch、AdamW、`weight_decay=0`、梯度累积 8、每样本最多 128 对 token、使用训练子集前 320 条估计归一化统计量；字符边界配对、Llama token 网格和 normalized MSE 训练目标不变，选择 Validation normalized MSE 最低的 checkpoint。
+- **第一轮**：两方向均扫描 `5e-5、1e-4、2e-4、3e-4、5e-4`；其中 `3e-4` 直接复用实验七／八，其他四档每方向各训练一个 Adapter（新增 8 次训练，16 次 E/F 评测）。
+- **第二轮（2026-11-09，非对称扩展）**：Qwen3-8B → Llama 向上扫描 `7e-4、1e-3、1.5e-3、2e-3、3e-3`；Qwen3-14B → Llama 向下扫描 `4e-5、3e-5、2e-5、1e-5、5e-6`。物理 **GPU 1** 串行执行，新增 10 次 Adapter 训练、20 次 E/F 评测；与第一轮及原基线汇总为 **20 套学习率配置、40 条 E/F 指标**。不重训底座模型或 Safety Head，不覆盖旧 checkpoint。
 
-### 2. 全部学习率结果
+### 2. 两轮学习率扫描完整结果（20 套配置）
 
-以下 F1 均为 harmful（label=1）；E 与 F 每组测试 1000 条。验证 MSE 是相应 E/F 共用 Adapter 的最佳 checkpoint 指标。
+F1 均针对 harmful（label=1）；E、F 每组各测试 1000 条。**最佳 Epoch** 均指 Validation normalized MSE 最低时的 Adapter checkpoint，并非使用测试 F1 选 Epoch；本表所有配置的最佳 Epoch 均为 3。
 
-| 迁移方向 | Adapter 学习率 | 最优 Epoch | Validation normalized MSE | E Streaming F1 | F Streaming F1 |
-|---|---:|---:|---:|---:|---:|
-| Qwen3-8B → Llama-3.1-8B-Instruct | `5e-5` | 3 | 0.5153845 | 0.6866 | 0.7243 |
-| Qwen3-8B → Llama-3.1-8B-Instruct | `1e-4` | 3 | **0.4994888** | 0.7329 | 0.7371 |
-| Qwen3-8B → Llama-3.1-8B-Instruct | `2e-4` | 3 | 0.5002444 | 0.7607 | 0.7516 |
-| Qwen3-8B → Llama-3.1-8B-Instruct | `3e-4`（原基线） | 3 | 0.5052293 | 0.7706 | 0.7543 |
-| Qwen3-8B → Llama-3.1-8B-Instruct | `5e-4` | 3 | 0.5156211 | **0.7807** | **0.7598** |
-| Qwen3-14B → Llama-3.1-8B-Instruct | `5e-5` | 3 | 0.5133033 | **0.6412** | 0.6799 |
-| Qwen3-14B → Llama-3.1-8B-Instruct | `1e-4` | 3 | **0.4993510** | 0.6235 | 0.6799 |
-| Qwen3-14B → Llama-3.1-8B-Instruct | `2e-4` | 3 | 0.5027213 | 0.6235 | 0.6799 |
-| Qwen3-14B → Llama-3.1-8B-Instruct | `3e-4`（原基线） | 3 | 0.5107621 | 0.6235 | 0.6799 |
-| Qwen3-14B → Llama-3.1-8B-Instruct | `5e-4` | 3 | 0.5290842 | 0.6235 | 0.6799 |
+| 迁移方向 | Adapter 学习率 | 扫描轮次 | 最佳 Epoch | Validation normalized MSE | E Streaming F1 | F Streaming F1 | E FP | F FP | F 预测 harmful 比例 |
+|---|---:|---|---:|---:|---:|---:|---:|---:|---:|
+| Qwen3-8B → Llama-3.1-8B-Instruct | `5e-5` | 第一轮 | 3 | 0.5153845 | 0.6866 | 0.7243 | 402 | 390 | 91.4% |
+| Qwen3-8B → Llama-3.1-8B-Instruct | `1e-4` | 第一轮 | 3 | **0.4994888** | 0.7329 | 0.7371 | 318 | 363 | 88.6% |
+| Qwen3-8B → Llama-3.1-8B-Instruct | `2e-4` | 第一轮 | 3 | 0.5002444 | 0.7607 | 0.7516 | 272 | 334 | 85.6% |
+| Qwen3-8B → Llama-3.1-8B-Instruct | `3e-4` | 原基线复用 | 3 | 0.5052293 | 0.7706 | 0.7543 | 257 | 329 | 85.1% |
+| Qwen3-8B → Llama-3.1-8B-Instruct | `5e-4` | 第一轮 | 3 | 0.5156211 | 0.7807 | 0.7598 | 242 | 319 | 84.1% |
+| Qwen3-8B → Llama-3.1-8B-Instruct | `7e-4` | 第二轮 | 3 | 0.5256328 | 0.7855 | 0.7613 | 232 | 318 | 84.1% |
+| Qwen3-8B → Llama-3.1-8B-Instruct | `1e-3` | 第二轮 | 3 | 0.5403994 | 0.7879 | 0.7623 | 227 | 313 | 83.4% |
+| Qwen3-8B → Llama-3.1-8B-Instruct | `1.5e-3` | 第二轮 | 3 | 0.5878416 | 0.7833 | 0.7623 | 232 | 313 | 83.4% |
+| Qwen3-8B → Llama-3.1-8B-Instruct | `2e-3` | 第二轮 | 3 | 0.6306917 | 0.7975 | 0.7682 | 212 | 304 | 82.6% |
+| Qwen3-8B → Llama-3.1-8B-Instruct | `3e-3` | 第二轮 | 3 | 0.6729172 | **0.8084** | **0.7745** | 197 | 293 | 81.5% |
+| Qwen3-14B → Llama-3.1-8B-Instruct | `5e-6` | 第二轮 | 3 | 0.7806590 | **0.7802** | **0.6808** | 249 | 483 | 99.8% |
+| Qwen3-14B → Llama-3.1-8B-Instruct | `1e-5` | 第二轮 | 3 | 0.6666630 | 0.7724 | 0.6803 | 259 | 484 | 99.9% |
+| Qwen3-14B → Llama-3.1-8B-Instruct | `2e-5` | 第二轮 | 3 | 0.5774219 | 0.7255 | 0.6799 | 334 | 485 | 100.0% |
+| Qwen3-14B → Llama-3.1-8B-Instruct | `3e-5` | 第二轮 | 3 | 0.5414123 | 0.6772 | 0.6799 | 424 | 485 | 100.0% |
+| Qwen3-14B → Llama-3.1-8B-Instruct | `4e-5` | 第二轮 | 3 | 0.5233644 | 0.6513 | 0.6799 | 483 | 485 | 100.0% |
+| Qwen3-14B → Llama-3.1-8B-Instruct | `5e-5` | 第一轮 | 3 | 0.5133033 | 0.6412 | 0.6799 | 507 | 485 | 100.0% |
+| Qwen3-14B → Llama-3.1-8B-Instruct | `1e-4` | 第一轮 | 3 | **0.4993510** | 0.6235 | 0.6799 | 547 | 485 | 100.0% |
+| Qwen3-14B → Llama-3.1-8B-Instruct | `2e-4` | 第一轮 | 3 | 0.5027213 | 0.6235 | 0.6799 | 547 | 485 | 100.0% |
+| Qwen3-14B → Llama-3.1-8B-Instruct | `3e-4` | 原基线复用 | 3 | 0.5107621 | 0.6235 | 0.6799 | 547 | 485 | 100.0% |
+| Qwen3-14B → Llama-3.1-8B-Instruct | `5e-4` | 第一轮 | 3 | 0.5290842 | 0.6235 | 0.6799 | 547 | 485 | 100.0% |
 
-### 3. Streaming 错误分布与全量有害触发
+**读表提醒**：表中的 E/F 最高 Streaming F1 是对同一 Test 反复扫描后观察到的数值，属于探索性结果，不是独立验证集选定超参数后的无偏最终测试成绩。
 
-下表中的 `TP/FP/FN/TN` 是按 `max(pred)` 得到的 **Streaming-level 响应级混淆矩阵**，不是逐 token 分类数；安全类别 `label=0`，有害类别 `label=1`。
+### 3. Streaming 错误分布与有害预测偏置
+
+下表的 `TP/FP/FN/TN` 是**Streaming-level 响应级**混淆矩阵，不是 token 级真值统计。原第一轮行沿用已记录的实测混淆矩阵；第二轮仅提供 F1（四位小数）、FP 和类别总数，故其余项按这些数值**唯一反推**并核对到四位小数。若后续有原始 `metrics_*.json`，应以其逐样本统计为准。
 
 | 迁移方向 | LR | E：TP / FP / FN / TN | E 预测 harmful 比例 | F：TP / FP / FN / TN | F 预测 harmful 比例 |
 |---|---|---|---:|---|---:|
@@ -503,13 +517,23 @@ python exp4_qwen14_token_alignment_ablation.py --mode report
 | Qwen3-8B → Llama-3.1-8B-Instruct | `2e-4` | 445 / 272 / 8 / 275 | 71.7% | 522 / 334 / 11 / 133 | 85.6% |
 | Qwen3-8B → Llama-3.1-8B-Instruct | `3e-4` | 445 / 257 / 8 / 290 | 70.2% | 522 / 329 / 11 / 138 | 85.1% |
 | Qwen3-8B → Llama-3.1-8B-Instruct | `5e-4` | 445 / 242 / 8 / 305 | 68.7% | 522 / 319 / 11 / 148 | 84.1% |
-| Qwen3-14B → Llama-3.1-8B-Instruct | `5e-5` | 453 / 507 / 0 / 40 | 96.0% | 515 / 485 / 0 / 0 | **100.0%** |
-| Qwen3-14B → Llama-3.1-8B-Instruct | `1e-4` | 453 / 547 / 0 / 0 | **100.0%** | 515 / 485 / 0 / 0 | **100.0%** |
-| Qwen3-14B → Llama-3.1-8B-Instruct | `2e-4` | 453 / 547 / 0 / 0 | **100.0%** | 515 / 485 / 0 / 0 | **100.0%** |
-| Qwen3-14B → Llama-3.1-8B-Instruct | `3e-4` | 453 / 547 / 0 / 0 | **100.0%** | 515 / 485 / 0 / 0 | **100.0%** |
-| Qwen3-14B → Llama-3.1-8B-Instruct | `5e-4` | 453 / 547 / 0 / 0 | **100.0%** | 515 / 485 / 0 / 0 | **100.0%** |
+| Qwen3-8B → Llama-3.1-8B-Instruct | `7e-4` | 443 / 232 / 10 / 315 | 67.5% | 523 / 318 / 10 / 149 | 84.1% |
+| Qwen3-8B → Llama-3.1-8B-Instruct | `1e-3` | 442 / 227 / 11 / 320 | 66.9% | 521 / 313 / 12 / 154 | 83.4% |
+| Qwen3-8B → Llama-3.1-8B-Instruct | `1.5e-3` | 441 / 232 / 12 / 315 | 67.3% | 521 / 313 / 12 / 154 | 83.4% |
+| Qwen3-8B → Llama-3.1-8B-Instruct | `2e-3` | 441 / 212 / 12 / 335 | 65.3% | 522 / 304 / 11 / 163 | 82.6% |
+| Qwen3-8B → Llama-3.1-8B-Instruct | `3e-3` | 441 / 197 / 12 / 350 | 63.8% | 522 / 293 / 11 / 174 | 81.5% |
+| Qwen3-14B → Llama-3.1-8B-Instruct | `5e-6` | 449 / 249 / 4 / 298 | 69.8% | 515 / 483 / 0 / 2 | 99.8% |
+| Qwen3-14B → Llama-3.1-8B-Instruct | `1e-5` | 448 / 259 / 5 / 288 | 70.7% | 515 / 484 / 0 / 1 | 99.9% |
+| Qwen3-14B → Llama-3.1-8B-Instruct | `2e-5` | 448 / 334 / 5 / 213 | 78.2% | 515 / 485 / 0 / 0 | 100.0% |
+| Qwen3-14B → Llama-3.1-8B-Instruct | `3e-5` | 449 / 424 / 4 / 123 | 87.3% | 515 / 485 / 0 / 0 | 100.0% |
+| Qwen3-14B → Llama-3.1-8B-Instruct | `4e-5` | 452 / 483 / 1 / 64 | 93.5% | 515 / 485 / 0 / 0 | 100.0% |
+| Qwen3-14B → Llama-3.1-8B-Instruct | `5e-5` | 453 / 507 / 0 / 40 | 96.0% | 515 / 485 / 0 / 0 | 100.0% |
+| Qwen3-14B → Llama-3.1-8B-Instruct | `1e-4` | 453 / 547 / 0 / 0 | 100.0% | 515 / 485 / 0 / 0 | 100.0% |
+| Qwen3-14B → Llama-3.1-8B-Instruct | `2e-4` | 453 / 547 / 0 / 0 | 100.0% | 515 / 485 / 0 / 0 | 100.0% |
+| Qwen3-14B → Llama-3.1-8B-Instruct | `3e-4` | 453 / 547 / 0 / 0 | 100.0% | 515 / 485 / 0 / 0 | 100.0% |
+| Qwen3-14B → Llama-3.1-8B-Instruct | `5e-4` | 453 / 547 / 0 / 0 | 100.0% | 515 / 485 / 0 / 0 | 100.0% |
 
-对 Qwen3-14B → Llama-3.1-8B-Instruct 进一步对比 Response-level 与 Streaming-level 的有害预测数量（每行均为 1000 条响应；`Stream only` 为 Response 判 benign、Streaming 判 harmful 的数量）：
+原实验对 **Qwen3-14B → Llama** 还单独检查过部分学习率的 Response-level harmful 数量；下表继续保留这项历史统计（没有为第二轮猜测 Response-level 数值）：
 
 | 学习率 | E Response+ / Streaming+ / Stream only | F Response+ / Streaming+ / Stream only |
 |---|---|---|
@@ -518,15 +542,17 @@ python exp4_qwen14_token_alignment_ablation.py --mode report
 | `3e-4` | 994 / 1000 / 6 | 986 / 1000 / 14 |
 | `5e-4` | 998 / 1000 / 2 | 995 / 1000 / 5 |
 
-`2e-4` 的 Response+/Stream only 未在本次单独统计输出中提供，故不补写。**Streaming 全预测 harmful 不等于每个 token 都预测 harmful**，而是至少一个响应 token 触发即判整条 harmful。
+其中 `Stream only` 表示 Response-level 判 benign、Streaming-level 判 harmful 的响应数；其他学习率的 Response+ 未在现有输出中提供，故不补写。**Streaming 全量 harmful 只表示每条 Response 至少有一个 token 触发，不等于每个 token 都预测 harmful。**
 
-### 4. 直接观察、限制与产物
+### 4. 更新后的观察、限制与产物
 
-- **Qwen3-8B → Llama-3.1-8B-Instruct**：在本次 5 档范围内，学习率增大时 E/F Streaming FP 分别从 `402→242`、`390→319`，F1 有小幅改善；最佳 Streaming F1 出现在 `5e-4`，但其验证 MSE 并非最低。**更低的重建 MSE 不必然对应更高的 Streaming F1**。
-- **Qwen3-14B → Llama-3.1-8B-Instruct**：F 在全部 5 档下均将 1000 条响应判为 harmful（`TP=515, FP=485`），Streaming F1 恒为 `0.6799`；E 除 `5e-5` 外也全量触发。`3e-4` 时 E/F Response-level 就有 `994/986` 条被判 harmful，问题不只来自 Streaming 的 `max(pred)` 聚合。
-- **限制**：学习率与 Adapter 参数、MSE 和输出分类相关，但本实验不能单独证明预测偏置的具体机制；五档均为 3 Epoch、单随机种子，也不能据此断言 Affine 一定无法适配。
-- **代码／执行**：`Kelp/sweep_llama_target_lr.py`、`Kelp/run_llama_target_lr_sweep_gpu1.sh`；总日志 `logs/llama_target_lr_sweep_gpu1.log`。
-- **结果／Checkpoint**：`checkpoints/llama_target_lr_sweep_v1/summary_20_results.csv`；新增学习率分别保存在 `checkpoints/llama_target_lr_sweep_v1/{qwen8_to_llama,qwen14_to_llama}/lr_{5e-5,1e-4,2e-4,5e-4}/`（含 E/F metrics、predictions 和 `train_on_tgt_train/affine_best.pt`）。`3e-4` 的记录引用实验七／八 `checkpoints/cross_adapt_four_directions_v1/` 原产物，未覆盖。
+- **Qwen3-8B → Llama-3.1-8B-Instruct（向上扫描）**：从原基线 `3e-4` 到 `3e-3`，E/F Streaming F1 分别由 `0.7706/0.7543` 提高到 **`0.8084/0.7745`**（+3.78／+2.02 pp），E/F Streaming FP 分别由 `257/329` 降为 **`197/293`**；F 仍低于同一 Qwen3-8B Test 上真实 Llama 表征 C 的 `0.8198`（差 4.53 pp）。本轮最高 F1 位于扫描上界，未验证更高学习率的稳定性。
+- **Qwen3-14B → Llama-3.1-8B-Instruct（向下扫描）**：`3e-4 → 5e-6` 时，E Streaming F1 从 `0.6235` 提升至 **`0.7802`**（+15.67 pp），E FP 从 `547` 降至 `249`；但核心 F 仅由 `0.6799` 变为 **`0.6808`**（+0.09 pp），F FP `485 → 483`，仍有 **99.8%** 响应被判 harmful。低学习率改善 E 并不等于解决 F 的迁移退化。
+- **Val MSE 与下游 F1 不一致**：Qwen3-8B → Llama 的最低验证 MSE 为 `0.4994888`（`1e-4`），但最高 F F1 来自 `3e-3`（Val MSE `0.6729172`）；Qwen3-14B → Llama 的最低验证 MSE 为 `0.4993510`（`1e-4`），但最低学习率 `5e-6` 的 E F1 最高，且 Val MSE 升至 `0.7806590`。**最小 normalized MSE 不保证最佳下游检测 F1**；不同学习率均为最佳 Epoch 3，低 LR 还可能训练不足。
+- **解释边界**：全部为单 seed、3 Epoch；重复使用同一 Test 选择扫描中的最高 F1 存在测试集选择偏差。本实验未证明 F 组预测偏置的因果机制，也不能据此断言 Affine 结构必然不可用。后续正式超参数选择应优先使用独立验证数据的下游检测指标。
+- **第一轮代码／日志**：`Kelp/sweep_llama_target_lr.py`、`Kelp/run_llama_target_lr_sweep_gpu1.sh`；`logs/llama_target_lr_sweep_gpu1.log`；`checkpoints/llama_target_lr_sweep_v1/summary_20_results.csv`。
+- **第二轮代码／日志**：`Kelp/sweep_llama_target_lr_asymmetric.py`、`Kelp/run_llama_target_lr_asymmetric_gpu1.sh`；`logs/llama_target_lr_asymmetric_gpu1.log`。
+- **完整汇总**：`checkpoints/llama_target_lr_sweep_asymmetric_v2/summary_asymmetric_40_results.csv`（**40/40** E/F metrics，2026-11-09 21:37:08 +08:00）；新旧 Adapter checkpoint 分别独立保存于各自实验目录。原 `3e-4` 的记录复用 `checkpoints/cross_adapt_four_directions_v1/`，未重新训练。
 
 ---
 
