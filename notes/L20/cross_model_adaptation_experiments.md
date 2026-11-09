@@ -463,3 +463,110 @@ python exp4_qwen14_token_alignment_ablation.py --mode report
 - **统一汇总文件**：`checkpoints/cross_adapt_four_directions_v1/summary_16_results.csv`；总日志：`logs/exp5_to_exp8_master.log`。日志最终标记为 `ALL 16 METRICS READY` 与 `ALL EXPERIMENTS 5/6/7/8 COMPLETE`（2026-11-09 13:23:06，+08:00）。
 - **直接观察**：在各方向各自的 Source Test 上，F 与 C 使用同一个目标围栏，因此可比较表征映射后的结果和真实目标表征结果；本轮 Llama → 14B 的 F 高于 C，而另外三个方向 F 低于 C。**C 不是理论性能上界**。
 - **比较限制**：不同方向的测试 Response 来源、Target Safety Head 及字符网格不同，不能仅凭跨方向 F1 排名确定表征可迁移性的因果原因。本轮没有提供多随机种子或置信区间；不作额外机制归因。
+
+---
+
+## 实验九：迁移到 Llama-3.1-8B-Instruct 的 Adapter 学习率扫描与预测偏置检查
+
+### 1. 实验设置
+
+- **目的**：检查实验七、八中，使用冻结的 Llama-3.1-8B-Instruct Safety Head 时，Affine Adapter 的低 F1 是否对学习率敏感，并分析 Streaming-level 有害类别预测偏置。
+- **两个迁移方向**：`Qwen3-8B → Llama-3.1-8B-Instruct`（4096D → 4096D）与 `Qwen3-14B → Llama-3.1-8B-Instruct`（5120D → 4096D）。两者均冻结由 **Llama-3.1-8B-Instruct S-Eval Train（9000 条）**训练的原生 Safety Head。
+- **只重新训练 E/F 共用的 Adapter**：Adapter 训练 Response 为 **Llama-3.1-8B-Instruct S-Eval Train**（训练 8100／验证 900）；E 测 **Llama-3.1-8B-Instruct S-Eval Test**，F 分别测 **Qwen3-8B S-Eval Test**、**Qwen3-14B S-Eval Test**。不改变字符边界配对、Target（Llama）token 网格、归一化 MSE 或评测口径。
+- **控制变量**：`seed=42`、3 Epoch、AdamW、`weight_decay=0`、梯度累积 8、每样本最多 128 对、归一化统计前 320 条样本；仅扫描学习率 `5e-5`、`1e-4`、`2e-4`、`3e-4`、`5e-4`。其中 `3e-4` **直接复用实验七／八原结果**，其余四档每个迁移方向各训练一个 Adapter（共新增 8 次训练、16 次 E/F 评测）；采用物理 GPU 1 串行运行。
+
+### 2. 全部学习率结果
+
+以下 F1 均为 harmful（label=1）；E 与 F 每组测试 1000 条。验证 MSE 是相应 E/F 共用 Adapter 的最佳 checkpoint 指标。
+
+| 迁移方向 | Adapter 学习率 | 最优 Epoch | Validation normalized MSE | E Streaming F1 | F Streaming F1 |
+|---|---:|---:|---:|---:|---:|
+| Qwen3-8B → Llama-3.1-8B-Instruct | `5e-5` | 3 | 0.5153845 | 0.6866 | 0.7243 |
+| Qwen3-8B → Llama-3.1-8B-Instruct | `1e-4` | 3 | **0.4994888** | 0.7329 | 0.7371 |
+| Qwen3-8B → Llama-3.1-8B-Instruct | `2e-4` | 3 | 0.5002444 | 0.7607 | 0.7516 |
+| Qwen3-8B → Llama-3.1-8B-Instruct | `3e-4`（原基线） | 3 | 0.5052293 | 0.7706 | 0.7543 |
+| Qwen3-8B → Llama-3.1-8B-Instruct | `5e-4` | 3 | 0.5156211 | **0.7807** | **0.7598** |
+| Qwen3-14B → Llama-3.1-8B-Instruct | `5e-5` | 3 | 0.5133033 | **0.6412** | 0.6799 |
+| Qwen3-14B → Llama-3.1-8B-Instruct | `1e-4` | 3 | **0.4993510** | 0.6235 | 0.6799 |
+| Qwen3-14B → Llama-3.1-8B-Instruct | `2e-4` | 3 | 0.5027213 | 0.6235 | 0.6799 |
+| Qwen3-14B → Llama-3.1-8B-Instruct | `3e-4`（原基线） | 3 | 0.5107621 | 0.6235 | 0.6799 |
+| Qwen3-14B → Llama-3.1-8B-Instruct | `5e-4` | 3 | 0.5290842 | 0.6235 | 0.6799 |
+
+### 3. Streaming 错误分布与全量有害触发
+
+下表中的 `TP/FP/FN/TN` 是按 `max(pred)` 得到的 **Streaming-level 响应级混淆矩阵**，不是逐 token 分类数；安全类别 `label=0`，有害类别 `label=1`。
+
+| 迁移方向 | LR | E：TP / FP / FN / TN | E 预测 harmful 比例 | F：TP / FP / FN / TN | F 预测 harmful 比例 |
+|---|---|---|---:|---|---:|
+| Qwen3-8B → Llama-3.1-8B-Instruct | `5e-5` | 447 / 402 / 6 / 145 | 84.9% | 524 / 390 / 9 / 77 | 91.4% |
+| Qwen3-8B → Llama-3.1-8B-Instruct | `1e-4` | 446 / 318 / 7 / 229 | 76.4% | 523 / 363 / 10 / 104 | 88.6% |
+| Qwen3-8B → Llama-3.1-8B-Instruct | `2e-4` | 445 / 272 / 8 / 275 | 71.7% | 522 / 334 / 11 / 133 | 85.6% |
+| Qwen3-8B → Llama-3.1-8B-Instruct | `3e-4` | 445 / 257 / 8 / 290 | 70.2% | 522 / 329 / 11 / 138 | 85.1% |
+| Qwen3-8B → Llama-3.1-8B-Instruct | `5e-4` | 445 / 242 / 8 / 305 | 68.7% | 522 / 319 / 11 / 148 | 84.1% |
+| Qwen3-14B → Llama-3.1-8B-Instruct | `5e-5` | 453 / 507 / 0 / 40 | 96.0% | 515 / 485 / 0 / 0 | **100.0%** |
+| Qwen3-14B → Llama-3.1-8B-Instruct | `1e-4` | 453 / 547 / 0 / 0 | **100.0%** | 515 / 485 / 0 / 0 | **100.0%** |
+| Qwen3-14B → Llama-3.1-8B-Instruct | `2e-4` | 453 / 547 / 0 / 0 | **100.0%** | 515 / 485 / 0 / 0 | **100.0%** |
+| Qwen3-14B → Llama-3.1-8B-Instruct | `3e-4` | 453 / 547 / 0 / 0 | **100.0%** | 515 / 485 / 0 / 0 | **100.0%** |
+| Qwen3-14B → Llama-3.1-8B-Instruct | `5e-4` | 453 / 547 / 0 / 0 | **100.0%** | 515 / 485 / 0 / 0 | **100.0%** |
+
+对 Qwen3-14B → Llama-3.1-8B-Instruct 进一步对比 Response-level 与 Streaming-level 的有害预测数量（每行均为 1000 条响应；`Stream only` 为 Response 判 benign、Streaming 判 harmful 的数量）：
+
+| 学习率 | E Response+ / Streaming+ / Stream only | F Response+ / Streaming+ / Stream only |
+|---|---|---|
+| `5e-5` | 866 / 960 / 94 | 851 / 1000 / 149 |
+| `1e-4` | 935 / 1000 / 65 | 917 / 1000 / 83 |
+| `3e-4` | 994 / 1000 / 6 | 986 / 1000 / 14 |
+| `5e-4` | 998 / 1000 / 2 | 995 / 1000 / 5 |
+
+`2e-4` 的 Response+/Stream only 未在本次单独统计输出中提供，故不补写。**Streaming 全预测 harmful 不等于每个 token 都预测 harmful**，而是至少一个响应 token 触发即判整条 harmful。
+
+### 4. 直接观察、限制与产物
+
+- **Qwen3-8B → Llama-3.1-8B-Instruct**：在本次 5 档范围内，学习率增大时 E/F Streaming FP 分别从 `402→242`、`390→319`，F1 有小幅改善；最佳 Streaming F1 出现在 `5e-4`，但其验证 MSE 并非最低。**更低的重建 MSE 不必然对应更高的 Streaming F1**。
+- **Qwen3-14B → Llama-3.1-8B-Instruct**：F 在全部 5 档下均将 1000 条响应判为 harmful（`TP=515, FP=485`），Streaming F1 恒为 `0.6799`；E 除 `5e-5` 外也全量触发。`3e-4` 时 E/F Response-level 就有 `994/986` 条被判 harmful，问题不只来自 Streaming 的 `max(pred)` 聚合。
+- **限制**：学习率与 Adapter 参数、MSE 和输出分类相关，但本实验不能单独证明预测偏置的具体机制；五档均为 3 Epoch、单随机种子，也不能据此断言 Affine 一定无法适配。
+- **代码／执行**：`Kelp/sweep_llama_target_lr.py`、`Kelp/run_llama_target_lr_sweep_gpu1.sh`；总日志 `logs/llama_target_lr_sweep_gpu1.log`。
+- **结果／Checkpoint**：`checkpoints/llama_target_lr_sweep_v1/summary_20_results.csv`；新增学习率分别保存在 `checkpoints/llama_target_lr_sweep_v1/{qwen8_to_llama,qwen14_to_llama}/lr_{5e-5,1e-4,2e-4,5e-4}/`（含 E/F metrics、predictions 和 `train_on_tgt_train/affine_best.pt`）。`3e-4` 的记录引用实验七／八 `checkpoints/cross_adapt_four_directions_v1/` 原产物，未覆盖。
+
+---
+
+## 实验十：Qwen3-14B → Llama-3.1-8B-Instruct 的 Prompt/Response 表征替换消融
+
+### 1. 实验设置
+
+- **目的**：在实验八、九发现严重有害类别误报后，定位全序列 Affine 映射中 **Prompt/Header 前缀**与 **Response** 部分各自对冻结 Llama Safety Head 输出的影响。
+- **固定条件**：Llama-3.1-8B-Instruct S-Eval Test（1000 条，benign 547 / harmful 453）；Safety Head 训练数据为 **Llama-3.1-8B-Instruct S-Eval Train（9000 条）**，继续冻结。复用实验八 E/F 在 `lr=3e-4`、Llama Train 上训练的 **Qwen3-14B → Llama-3.1-8B-Instruct** Affine Adapter；所有输入均排列在 Llama tokenizer 网格上，以 Llama 的 `assistant_start` 划分前缀与 Response。
+- **方法**：直接使用已有的真实 Llama hidden states 和 Qwen3-14B 经 Adapter 映射的 hidden states，拼接成 T0～T3 四种序列；**不重训 Adapter 或 Safety Head，不提取新的底座表征**。四组都使用相同样本、标签和离线评测规则（Response `pred[-2]`；Streaming `max(pred)`）。
+
+### 2. T0～T3 完整结果
+
+| 方案 | Prompt/Header 表征 | Response 表征 | Response F1 | Streaming F1 | Streaming FP |
+|---|---|---|---:|---:|---:|
+| **T0**（原生 D） | 真实 Llama-3.1-8B-Instruct 表征 | 真实 Llama-3.1-8B-Instruct 表征 | 0.9095 | **0.9191** | 48 |
+| **T1**（原实验八 E） | Qwen3-14B 经 Affine 映射 | Qwen3-14B 经 Affine 映射 | 0.6261 | 0.6235 | 547 |
+| **T2**（真实前缀） | **真实 Llama-3.1-8B-Instruct 表征** | Qwen3-14B 经 Affine 映射 | **0.9157** | **0.9213** | **47** |
+| **T3**（真实响应） | Qwen3-14B 经 Affine 映射 | **真实 Llama-3.1-8B-Instruct 表征** | 0.6283 | 0.6235 | 547 |
+
+**一致性校验**：T1 的逐样本 Response/Streaming 预测与实验八 E 的 `predictions_e.csv` **完全一致**；T0 的 Response/Streaming F1 与 L20 原生 Llama D 基线一致。脚本输出 `PASS: T1 predictions identical to original E; T0 native metrics match L20 D reference`。
+
+### 3. 直接观察与实验边界
+
+1. **只把映射前缀换成真实 Llama 前缀（T1 → T2）**：Response F1 `0.6261→0.9157`，Streaming F1 `0.6235→0.9213`（**+29.78 个百分点**），Streaming FP `547→47`（减少 500 条）。T2 与原生 T0 的 Streaming F1 仅差 `+0.22` 个百分点，未做显著性检验。
+2. **只把映射 Response 换成真实 Llama Response（T1 → T3）**：Response F1 仅 `0.6261→0.6283`，Streaming F1 不变（`0.6235`），Streaming FP 仍为 `547`。
+3. **阶段性判断**：在固定 Adapter、冻结围栏和相同测试集上，性能退化主要与 **Prompt/Header 映射表征**有关；仅修复 Response 表征不能解除全量 Streaming 有害触发。尚未进一步区分用户 Prompt 正文、chat-template／角色标记、assistant header 的独立影响，也未证明注意力或记忆单元的具体作用机制。
+4. **应用边界**：T2/T3 是依赖**真实目标 Llama hidden states** 的诊断性混合输入，不是无需运行旧模型的可部署 Adapter 迁移方案。该结果不代表单纯增加学习率可以解决前缀映射问题。
+
+### 4. 代码与产物
+
+- **脚本**：`Kelp/exp9_llama_prompt_response_ablation.py`、`Kelp/run_exp9_llama_prompt_response_gpu1.sh`（物理 GPU 1；**脚本名称 exp9 沿用执行时命名，本记录按实验开展顺序归档为实验十**）。
+- **日志**：`logs/exp9_llama_prompt_response_gpu1.log`。
+- **结果目录**：`checkpoints/llama_target_prompt_response_ablation_v1/qwen14_to_llama_lr3e-4/`；`summary.csv`、`metrics_t0.json`～`metrics_t3.json`、`predictions_t0_t1_t2_t3.csv`。
+
+---
+
+## 当前阶段小结（实验一～十）
+
+- **实验一／二／五～八**：已完成 Qwen3-8B、Qwen3-14B、Llama-3.1-8B-Instruct 之间全部六个有向迁移方向的 Affine Adapter 基线。主要迁移指标应在**相同 Source Test、同一冻结 Target Safety Head** 下比较 C 与 F，不能把不同方向的 F1 视为同质测试集上的直接排名。
+- **实验三／四**：Token 对数量、内容 token 筛选和测试时字符网格构造都会影响评测结果，是跨模型比较时需要明确记录的协议变量。
+- **实验九／十**：迁移到 Llama Safety Head 时，尤其是 Qwen3-14B → Llama-3.1-8B-Instruct，存在严重的有害预测偏置；学习率扫描未消除此现象。Prompt/Response 混合表征消融表明，**使用真实 Llama Prompt/Header 前缀可显著恢复离线检测性能**。这为后续研究前缀表征映射提供方向，但尚不是可部署的修复方案。
+
