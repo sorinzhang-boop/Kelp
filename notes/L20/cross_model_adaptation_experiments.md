@@ -569,4 +569,87 @@ python exp4_qwen14_token_alignment_ablation.py --mode report
 - **实验一／二／五～八**：已完成 Qwen3-8B、Qwen3-14B、Llama-3.1-8B-Instruct 之间全部六个有向迁移方向的 Affine Adapter 基线。主要迁移指标应在**相同 Source Test、同一冻结 Target Safety Head** 下比较 C 与 F，不能把不同方向的 F1 视为同质测试集上的直接排名。
 - **实验三／四**：Token 对数量、内容 token 筛选和测试时字符网格构造都会影响评测结果，是跨模型比较时需要明确记录的协议变量。
 - **实验九／十**：迁移到 Llama Safety Head 时，尤其是 Qwen3-14B → Llama-3.1-8B-Instruct，存在严重的有害预测偏置；学习率扫描未消除此现象。Prompt/Response 混合表征消融表明，**使用真实 Llama Prompt/Header 前缀可显著恢复离线检测性能**。这为后续研究前缀表征映射提供方向，但尚不是可部署的修复方案。
+---
 
+## 实验十一：Qwen3-14B → Llama-3.1-8B-Instruct 的 F 组 Prompt/Response 表征替换消融
+
+- **目的与实验十的区别**：实验十只针对 **E 组（Llama-3.1-8B-Instruct S-Eval Test）**；本次改为核心迁移场景 **F 组（Qwen3-14B S-Eval Test，1000 条：benign 485 / harmful 515）**，检验真实 Prompt/Header 替换能否同样恢复检测能力。
+- **固定条件**：复用实验八 E/F 共用的 `lr=3e-4` Affine Adapter、冻结的 Llama Safety Head、现有双侧 Layer 20 hidden-state 缓存及字符映射；统一使用 Llama token 网格和 `assistant_start`。**不重新训练或提取底座表征**。T0/T1 分别与历史 C/F 逐样本预测完全一致。
+
+| 方案 | Prompt/Header 表征 | Response 表征 | Response F1 | Streaming F1 | Streaming FP |
+|---|---|---|---:|---:|---:|
+| **T0**（原 C） | 真实 Llama | 真实 Llama | 0.8223 | **0.7926** | 239 |
+| **T1**（原 F） | Qwen3-14B → Affine | Qwen3-14B → Affine | 0.6862 | 0.6799 | 485 |
+| **T2** | **真实 Llama** | Qwen3-14B → Affine | 0.7397 | **0.7076** | 422 |
+| **T3** | Qwen3-14B → Affine | **真实 Llama** | 0.6908 | 0.6799 | 485 |
+
+**观察**：T1 → T2 的 Streaming F1 仅提高 **2.77 pp**，FP 从 485 降至 422；T2 仍比 T0 低 **8.50 pp**。T1 → T3 的 Streaming F1 不变，仍对全部 1000 条响应触发 harmful。与实验十 E 组 T2 基本恢复原生表现不同，**F 组的退化不能只用 Prompt/Header 映射解释**；在真实前缀条件下，Response 映射差异仍显著影响最终预测。混合输入是诊断手段，并非可部署方案；不能直接将 E/F 差异归因于 Response 生成模型，因为测试集组成也不同。
+
+- **代码**：`Kelp/exp11_llama_f_prompt_response_ablation.py`、`Kelp/run_exp11_llama_f_prompt_response_gpu1.sh`；物理 GPU 1。
+- **产物**：`checkpoints/llama_target_prompt_response_ablation_v1/qwen14_to_llama_f_src_test_lr3e-4/`（`summary.csv`、`metrics_t0.json`～`metrics_t3.json`、逐样本预测）；日志 `logs/exp11_llama_f_prompt_response_gpu1.log`。
+
+---
+
+## 实验十二：F 组逐 Token 风险触发诊断
+
+- **方法**：在相同 Qwen3-14B S-Eval Test 上，复用实验十一 T0～T3 的输入构造，重新运行**冻结的 Llama Safety Head 前向**并记录逐 token 二分类判定；不重训 Adapter/Safety Head、不提取底座表征。四组 Response/Streaming 逐样本预测与实验十一**完全一致**。下述 token 比例指 Safety Head *预测*为 harmful 的比例，**没有 token 级真实标签**。
+
+| 方案 | Streaming TP / FP / FN / TN | Streaming F1 | Benign 响应的平均 harmful token 占比 | 首次触发相对位置中位数¹ |
+|---|---|---:|---:|---:|
+| T0（真实/真实） | 495 / 239 / 20 / 246 | 0.7926 | 23.78% | 29.28% |
+| T1（映射/映射） | 515 / 485 / 0 / 0 | 0.6799 | **98.61%** | 0% |
+| T2（真实/映射） | 513 / 422 / 2 / 63 | 0.7076 | **48.57%** | 17.13% |
+| T3（映射/真实） | 515 / 485 / 0 / 0 | 0.6799 | 96.94% | 0% |
+
+¹ 仅统计至少发生一次 harmful 触发的 benign Response，位置为 Safety Head 输出序列中的相对比例，**不是原始文本字符位置**。
+
+**同样本配对（485 条 benign，T0 → T2）**：两者均预测 benign **63** 条；T0 benign → T2 harmful **183** 条；T0 harmful → T2 benign **0** 条；两者均 harmful **239** 条。T1/T3 的几乎全 token harmful 说明退化并非仅由孤立 token 的 `max(pred)` 放大；T2 虽有改善，仍存在大量持续的 harmful 预测。
+
+- **代码**：`Kelp/exp12_f_token_triggers.py`、`Kelp/run_exp12_f_token_triggers_gpu1.sh`；物理 GPU 1。
+- **产物**：`checkpoints/llama_target_token_trigger_diagnostics_v1/qwen14_to_llama_f_src_test_lr3e-4/`，主要包括 `summary_by_label.csv`、`first_trigger_histogram.csv`、`paired_transitions.csv`、`sample_token_stats.csv`、`positive_token_runs.jsonl.gz`。
+
+---
+
+## 实验十三：F 组 183 条新增安全响应误报的离线分组分析
+
+- **方法**：仅用实验十二保存的 CSV 与 token 触发区间进行 **CPU 只读统计**。将 485 条 benign Response 按 T0/T2 的 Streaming 判定划分为：`new_fp_183`（T0 正确、T2 误报）、`stable_tn_63`（均正确）和 `persistent_fp_239`（均误报）。无新模型前向。
+
+| T2 统计量 | 新增误报 183 | 始终正确 63 | 持续误报 239 |
+|---|---:|---:|---:|
+| Response 输出 token 长度中位数 | 158 | 170 | **413** |
+| Harmful token 占比均值 / 中位数 | 30.21% / 25.20% | 0% / 0% | **75.44% / 79.40%** |
+| 首次触发相对位置中位数 | 31.58% | —（未触发） | 11.42% |
+| Harmful 连续区间数中位数 | 4 | 0 | 5 |
+| 最长连续 harmful 区间占响应比例中位数 | 11.16% | 0% | **55.84%** |
+
+**新增误报首次触发分布**：0～10%：15 条；10～25%：54 条；25～50%：74 条；50～75%：26 条；75～100%：14 条。即 **143/183（78.1%）** 在前半段首次触发，但并非都在开头。对 T0 原本判 benign 的 246 条按长度分四组，T2 翻转率依次为 **40/61（65.6%）、52/62（83.9%）、48/61（78.7%）、43/62（69.3%）**，未观察到随长度单调升高。以上仅为描述性统计，不能排除长度或文本分布的混杂影响。
+
+- **代码**：`Kelp/exp13_f_false_positive_analysis.py`、`Kelp/run_exp13_f_false_positive_analysis.sh`；无需 GPU。
+- **产物**：`checkpoints/llama_target_false_positive_analysis_v1/qwen14_to_llama_f_src_test_lr3e-4/`，主要包括 `analysis_summary.txt`、`group_summary.csv`、`candidate_samples_for_token_inspection.csv`、`length_stratified_flip_rates.csv`。
+
+---
+
+## 实验十四：F 组典型误触发位置与原始 Response 文本对照
+
+- **方法**：CPU 只读检查实验十三筛出的 benign 新增误报样本 `597、624、697、36`。根据 **`target_cache_index = assistant_start + head_output_position`**，结合 Llama tokenizer 的字符偏移和已有 Qwen→Llama 来源索引，将首次触发位置、连续触发区间对应到 Response 文本。**不重新运行底座模型或 Safety Head**。
+
+| 样本 index | 首次触发输出位置 / 长度 | T2 harmful token 占比 | 观察 |
+|---|---:|---:|---|
+| 597 | 34 / 843（4.03%） | **81.38%** | 首次触发在普通解释文本；最长连续 harmful 区间为输出位置 **489～789（301 token）** |
+| 624 | 45 / 473（9.51%） | **84.78%** | 较早触发且持续占比较高 |
+| 697 | 50 / 243（20.58%） | **69.55%** | 中前段开始触发，存在长连续 harmful 区间 |
+| 36 | 71 / 77（92.21%） | **7.79%** | 临近结尾才触发，连续 6 个位置 harmful |
+
+**样本 597 的定位核查**：首次触发为 Llama Response 正文 token `' understood'`（Head 输出位置 34；目标缓存位置 100），映射 Qwen 来源缓存位置 70，`exact-boundary candidate=True`。这只表示当前 token 的**字符结束边界存在精确匹配候选**，不代表两种 hidden states 对齐充分或分类错误由该词触发。样本 597 的长连续 harmful 区间与描述性医疗费用文本对应，说明**至少部分误报是持续预测偏置，而非单个 token 的偶发触发**；四条案例不能代表全部 183 条的内容主题或因果机制。
+
+- **代码**：`Kelp/exp14_f_token_text_inspection.py`、`Kelp/run_exp14_f_token_text_inspection_cpu.sh`；无需 GPU。
+- **产物**：`checkpoints/llama_target_trigger_text_inspection_v1/qwen14_to_llama_f_src_test_lr3e-4/`，包括 `overview.csv`、`sample_0597_review.md`、`sample_0597_positions.csv` 等。
+
+---
+
+## 更新后的阶段小结（实验一～十四）
+
+1. **基线与协议**：六个有向迁移方向已覆盖（实验一、二、五～八）；字符对齐与 token 选择协议本身是重要变量（实验三、四）。在核心迁移 F 场景中，应优先在同一 Source Test 与同一 Target Safety Head 下比较真实目标表征 C 和映射表征 F。
+2. **Qwen3-14B → Llama 的预测偏置**：学习率扫描（实验九）未解决 F 的全量 Streaming harmful 触发。实验十在 **E（Llama Test）** 中发现真实 Prompt/Header 可将 Streaming F1 从 `0.6235` 恢复至 `0.9213`；但实验十一在 **F（Qwen3-14B Test）** 中只能从 `0.6799` 提高到 `0.7076`，仍低于 C 的 `0.7926`。**因此实验十的“前缀恢复即可恢复性能”不应推广为 F 组的结论**。
+3. **F 组误报的具体表现**：实验十二～十四表明，T2 在 485 条 benign 中新增 **183 条**误报；新增误报的 harmful token 占比均值 **30.21%**、首次触发位置中位数 **31.58%**，部分样本出现很长的持续 harmful 区间。问题不只在 Streaming 聚合或单一词语，Response 映射与前缀表征之间可能存在非加性交互。
+4. **尚未证实的机制与后续方向**：目前未直接测量映射 hidden states 的误差、余弦相似度或 Safety Head 对不同误差方向的敏感性，**不能将偏置确认为 Affine MSE 失真、Tokenizer 错位或具体敏感词导致**。可优先比较真实与映射 Response 表征的逐 token 误差及其与新增误报的关联；继续使用离线评测口径，混合真实 Llama hidden states 的消融不等于可部署方案。
