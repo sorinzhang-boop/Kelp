@@ -1,24 +1,26 @@
 # 流式安全围栏跨模型适配实验记录
 
+**结果表口径**：`Adapter 训练 Response` 表示用于训练表征映射器的 Response 来源；`Safety Head 训练数据` 表示该围栏最初训练所用的 S-Eval Train 数据集，两者不是同一概念。A 使用 Source 模型原生围栏，D 使用 Target 模型原生围栏；B、C、E、F 均复用同一个已训练并冻结的 Target 模型 Safety Head。表中模型、训练集、测试集均使用完整名称；F1 均针对 harmful（label=1）类别。
+
 ## 实验一：Qwen3-14B → Qwen3-8B
 
 ### 1. 实验配置与结果总表
 
 - **环境**：`guard_g22`，NVIDIA L20（使用 GPU 0）；项目根目录：`~/plugguard_repro/`（下文路径均相对于此目录）。
-- **数据**：StreamGuardBench v1 / S-Eval；8B、14B 各有 Train 9000 / Test 1000。8B Test：benign 467 / harmful 533；14B Test：benign 485 / harmful 515。
+- **数据**：StreamGuardBench v1 / S-Eval；8B、14B 各有 Train 9000 / Test 1000。Qwen3-8B S-Eval Test：benign 467 / harmful 533；Qwen3-14B S-Eval Test：benign 485 / harmful 515。
 - **表征**：均取 Layer 20；Qwen3-8B 为 4096 维，Qwen3-14B 为 5120 维。B、C、E、F 均**冻结同一个 Qwen3-8B Safety Head**；A、D 为此前复现的原生围栏。
-- **指标**：下表 F1 均指 harmful（label=1）类别；每组测试 1000 条。`8B/14B Test` 指 **Response 的生成来源**，不等于提取 hidden states 的模型。
+- **指标**：下表 F1 均指 harmful（label=1）类别；每组测试 1000 条。`8B/Qwen3-14B S-Eval Test` 指 **Response 的生成来源**，不等于提取 hidden states 的模型。
 
-| 实验 | 设计目的 | Adapter 训练 Response | 测试 Response | 测试表征 → Safety Head | Response F1 | Streaming F1 |
-|---|---|---|---|---|---:|---:|
-| **A** | 新模型原生基线 | 无（14B 围栏原生训练） | 14B Test | 14B 5120D → 14B Head | 0.8955 | **0.8971** |
-| **B** | 新数据训练的 Affine 基线 | 14B Train | 14B Test | 14B 5120D → Affine → 8B Head | 0.8182 | **0.8054** |
-| **C** | 真实 8B 表征对照，分离映射损失 | 无 | 14B Test | **8B 对同一 14B 文本提取的 4096D** → 8B Head | 0.9080 | **0.9007** |
-| **D** | 旧模型原生基线 | 无（8B 围栏原生训练） | 8B Test | 8B 4096D → 8B Head | 0.9245 | **0.9228** |
-| **E** | 旧数据训练，在旧模型生成文本上测试 | 8B Train | 8B Test | 14B 5120D → Affine → 8B Head | 0.8247 | **0.8310** |
-| **F** | 旧数据训练，在新模型生成文本上测试（主要适配场景） | 8B Train | 14B Test | 14B 5120D → **同 E 的 Affine** → 8B Head | 0.8121 | **0.8119** |
+| 实验 | 设计目的 | Adapter 训练 Response | Safety Head 训练数据 | 测试 Response | 测试表征 → Safety Head | Response F1 | Streaming F1 |
+|---|---|---|---|---|---|---:|---:|
+| **A** | Source 模型原生围栏基线 | 无（原生围栏） | Qwen3-14B S-Eval Train（9000 条） | Qwen3-14B S-Eval Test | Qwen3-14B Layer 20 hidden states（5120D） → 冻结的 Qwen3-14B Safety Head | 0.8955 | **0.8971** |
+| **B** | 在 Source 模型的 S-Eval Train 上训练 Adapter | Qwen3-14B S-Eval Train | Qwen3-8B S-Eval Train（9000 条） | Qwen3-14B S-Eval Test | Qwen3-14B Layer 20 hidden states（5120D） → Affine Adapter → 冻结的 Qwen3-8B Safety Head | 0.8182 | **0.8054** |
+| **C** | 真实 Target 模型表征对照（不使用 Adapter） | 无（不使用 Adapter） | Qwen3-8B S-Eval Train（9000 条） | Qwen3-14B S-Eval Test | Qwen3-8B 对同一 Qwen3-14B Response 提取的真实 Layer 20 hidden states（4096D）→ 冻结的 Qwen3-8B Safety Head | 0.9080 | **0.9007** |
+| **D** | Target 模型原生围栏基线 | 无（原生围栏） | Qwen3-8B S-Eval Train（9000 条） | Qwen3-8B S-Eval Test | Qwen3-8B Layer 20 hidden states（4096D） → 冻结的 Qwen3-8B Safety Head | 0.9245 | **0.9228** |
+| **E** | 在 Target 模型的 S-Eval Train 上训练 Adapter，并测试 Target 模型生成的 Response | Qwen3-8B S-Eval Train | Qwen3-8B S-Eval Train（9000 条） | Qwen3-8B S-Eval Test | Qwen3-14B Layer 20 hidden states（5120D） → Affine Adapter → 冻结的 Qwen3-8B Safety Head | 0.8247 | **0.8310** |
+| **F** | 复用 E 的 Adapter，并测试 Source 模型生成的 Response | Qwen3-8B S-Eval Train（与 E 共用 Adapter） | Qwen3-8B S-Eval Train（9000 条） | Qwen3-14B S-Eval Test | Qwen3-14B Layer 20 hidden states（5120D） → Affine Adapter → 冻结的 Qwen3-8B Safety Head | 0.8121 | **0.8119** |
 
-**说明**：E、F 共用同一个 Adapter；B 使用另一个在 14B Train 上训练的 Adapter。C 需要在测试时运行 8B 提取真实表征，仅是诊断基线，不是最终部署方案。
+**说明**：E、F 共用同一个 Adapter；B 使用另一个在 Qwen3-14B S-Eval Train 上训练的 Adapter。C 需要在测试时运行 8B 提取真实表征，仅是诊断基线，不是最终部署方案。
 
 ### 2. Adapter 结构、损失与训练配置
 
@@ -65,28 +67,28 @@ E/F 最优 Adapter：**epoch 3，验证 normalized MSE = 0.3142155**。B 的对�
 
 **执行方式**：B 分别运行 `--mode train`、`--mode eval`；E/F 运行 `bash Kelp/run_affine_legacy_e_f.sh`（在 Kelp 目录内可写 `bash run_affine_legacy_e_f.sh`），自动顺序训练一次 Adapter、评测 E、评测 F，指定 `CUDA_VISIBLE_DEVICES=0`。
 
-**初步观察**：同一 14B Test 上，C 的 Streaming F1 为 0.9007，B/F 为 0.8054/0.8119；当前主要差距在将真实 8B 表征替换成 Affine 映射表征之后。尚未进行 MLP、MATCHA 或风险蒸馏实验。
+**初步观察**：同一 Qwen3-14B S-Eval Test 上，C 的 Streaming F1 为 0.9007，B/F 为 0.8054/0.8119；当前主要差距在将真实 8B 表征替换成 Affine 映射表征之后。尚未进行 MLP、MATCHA 或风险蒸馏实验。
 
 ---
 
-## 实验二：Llama-3.1-8B → Qwen3-8B
+## 实验二：Llama-3.1-8B-Instruct → Qwen3-8B
 
 ### 1. 实验配置与结果总表
 
-- **环境与数据**：同上，使用 GPU 0；StreamGuardBench v1 / S-Eval。Llama、Qwen3-8B 各有 Train 9000 / Test 1000；Llama Test：benign 547 / harmful 453；8B Test：benign 467 / harmful 533。
+- **环境与数据**：同上，使用 GPU 0；StreamGuardBench v1 / S-Eval。Llama、Qwen3-8B 各有 Train 9000 / Test 1000；Llama-3.1-8B-Instruct S-Eval Test：benign 547 / harmful 453；Qwen3-8B S-Eval Test：benign 467 / harmful 533。
 - **表征与围栏**：两模型均提取 Layer 20、hidden size 均为 4096。B、C、E、F 始终使用**同一个冻结的 Qwen3-8B Safety Head**；A、D 为此前完成的原生围栏复现实验。
-- **指标**：F1 均为 harmful（label=1）类别。下表的 Llama/8B Train、Test 指 Response 的生成来源；B、E、F 测试时均由 **Llama 提取表征**，经过 Adapter 进入 8B 围栏。
+- **指标**：F1 均为 harmful（label=1）类别。下表的 Llama/Qwen3-8B S-Eval Train、Test 指 Response 的生成来源；B、E、F 测试时均由 **Llama 提取表征**，经过 Adapter 进入 8B 围栏。
 
-| 实验 | 设计目的 | Adapter 训练 Response | 测试 Response | 测试表征 → Safety Head | Response F1 | Streaming F1 |
-|---|---|---|---|---|---:|---:|
-| **A** | 新模型原生基线 | 无（Llama 围栏原生训练） | Llama Test | Llama 4096D → Llama Head | 0.9095 | **0.9191** |
-| **B** | 新数据训练的 Affine 基线 | Llama Train | Llama Test | Llama 4096D → Affine → 8B Head | 0.8340 | **0.8973** |
-| **C** | 真实 8B 表征对照，检验映射造成的损失 | 无 | Llama Test | **8B 对同一 Llama 文本提取的 4096D** → 8B Head | 0.9271 | **0.9253** |
-| **D** | 旧模型原生基线 | 无（8B 围栏原生训练） | 8B Test | 8B 4096D → 8B Head | 0.9245 | **0.9228** |
-| **E** | 旧数据训练，在旧模型生成文本上测试 | 8B Train | 8B Test | Llama 4096D → Affine → 8B Head | 0.9185 | **0.9121** |
-| **F** | 旧数据训练，在新模型生成文本上测试（主要适配场景） | 8B Train | Llama Test | Llama 4096D → **同 E 的 Affine** → 8B Head | 0.9177 | **0.9199** |
+| 实验 | 设计目的 | Adapter 训练 Response | Safety Head 训练数据 | 测试 Response | 测试表征 → Safety Head | Response F1 | Streaming F1 |
+|---|---|---|---|---|---|---:|---:|
+| **A** | Source 模型原生围栏基线 | 无（原生围栏） | Llama-3.1-8B-Instruct S-Eval Train（9000 条） | Llama-3.1-8B-Instruct S-Eval Test | Llama-3.1-8B-Instruct Layer 20 hidden states（4096D） → 冻结的 Llama-3.1-8B-Instruct Safety Head | 0.9095 | **0.9191** |
+| **B** | 在 Source 模型的 S-Eval Train 上训练 Adapter | Llama-3.1-8B-Instruct S-Eval Train | Qwen3-8B S-Eval Train（9000 条） | Llama-3.1-8B-Instruct S-Eval Test | Llama-3.1-8B-Instruct Layer 20 hidden states（4096D） → Affine Adapter → 冻结的 Qwen3-8B Safety Head | 0.8340 | **0.8973** |
+| **C** | 真实 Target 模型表征对照（不使用 Adapter） | 无（不使用 Adapter） | Qwen3-8B S-Eval Train（9000 条） | Llama-3.1-8B-Instruct S-Eval Test | Qwen3-8B 对同一 Llama-3.1-8B-Instruct Response 提取的真实 Layer 20 hidden states（4096D）→ 冻结的 Qwen3-8B Safety Head | 0.9271 | **0.9253** |
+| **D** | Target 模型原生围栏基线 | 无（原生围栏） | Qwen3-8B S-Eval Train（9000 条） | Qwen3-8B S-Eval Test | Qwen3-8B Layer 20 hidden states（4096D） → 冻结的 Qwen3-8B Safety Head | 0.9245 | **0.9228** |
+| **E** | 在 Target 模型的 S-Eval Train 上训练 Adapter，并测试 Target 模型生成的 Response | Qwen3-8B S-Eval Train | Qwen3-8B S-Eval Train（9000 条） | Qwen3-8B S-Eval Test | Llama-3.1-8B-Instruct Layer 20 hidden states（4096D） → Affine Adapter → 冻结的 Qwen3-8B Safety Head | 0.9185 | **0.9121** |
+| **F** | 复用 E 的 Adapter，并测试 Source 模型生成的 Response | Qwen3-8B S-Eval Train（与 E 共用 Adapter） | Qwen3-8B S-Eval Train（9000 条） | Llama-3.1-8B-Instruct S-Eval Test | Llama-3.1-8B-Instruct Layer 20 hidden states（4096D） → Affine Adapter → 冻结的 Qwen3-8B Safety Head | 0.9177 | **0.9199** |
 
-**说明**：B 使用 Llama Train 训练的 Adapter；E、F 共用 8B Train 训练的另一个 Adapter。C 需要运行 8B 以取得真实表征，仅作诊断基线。A 使用 Llama 原生 token 序列；B、C、F 在评测时统一以 **Qwen3-8B token 序列**为坐标，因此 C 与 B/F 更适合直接比较。
+**说明**：B 使用 Llama-3.1-8B-Instruct S-Eval Train 训练的 Adapter；E、F 共用 Qwen3-8B S-Eval Train 训练的另一个 Adapter。C 需要运行 8B 以取得真实表征，仅作诊断基线。A 使用 Llama 原生 token 序列；B、C、F 在评测时统一以 **Qwen3-8B token 序列**为坐标，因此 C 与 B/F 更适合直接比较。
 
 ### 2. Adapter 结构、损失、tokenizer 对齐与训练配置
 
@@ -128,7 +130,7 @@ Qwen3-14B 与 Qwen3-8B 在上一轮抽样审计中 token ID 和位置一致，�
 
 E/F 最优 Adapter：**epoch 3，验证 normalized MSE = 0.51734097**。B 的最佳验证 MSE 待从 `metrics_b.json` 核对。
 
-**评测规则**：Response-level 使用 `pred[-2]`；Streaming-level 使用 `max(pred)`。同一 Llama Test 上，F 的 Streaming F1 为 **0.9199**，较 C（0.9253）低 **0.0054**；B 为 **0.8973**。该差异仍需结合 token 对齐覆盖率及多随机种子分析。
+**评测规则**：Response-level 使用 `pred[-2]`；Streaming-level 使用 `max(pred)`。同一 Llama-3.1-8B-Instruct S-Eval Test 上，F 的 Streaming F1 为 **0.9199**，较 C（0.9253）低 **0.0054**；B 为 **0.8973**。该差异仍需结合 token 对齐覆盖率及多随机种子分析。
 
 ### 3. 代码与实验产物位置
 
@@ -163,12 +165,12 @@ E/F 最优 Adapter：**epoch 3，验证 normalized MSE = 0.51734097**。B 的最
 
 ### 2. 四种 Adapter 训练设置的数量统计
 
-| 模型迁移方向 | 训练 Response（对应实验） | Train 候选对（8100 条） | 每 Epoch 实际抽取 | 3 Epoch 累计抽取 | 3 Epoch 去重 | 去重 / 累计 |
+| 模型迁移方向 | Adapter 训练 Response（对应实验） | Train 候选对（8100 条） | 每 Epoch 实际抽取 | 3 Epoch 累计抽取 | 3 Epoch 去重 | 去重 / 累计 |
 |---|---|---:|---:|---:|---:|---:|
-| Qwen3-14B → 8B | 14B Train（B） | 4,686,881 | 1,023,752 | 3,071,256 | 2,002,598 | 65.20% |
-| Qwen3-14B → 8B | 8B Train（E/F） | 4,792,878 | 1,025,330 | 3,075,990 | 1,986,770 | 64.59% |
-| Llama → 8B | Llama Train（B） | 2,262,223 | **686,963** | 2,060,889 | **1,250,653** | 60.69% |
-| Llama → 8B | 8B Train（E/F） | 4,661,962 | 1,015,354 | 3,046,062 | 1,980,889 | 65.03% |
+| Qwen3-14B → Qwen3-8B | Qwen3-14B S-Eval Train（B） | 4,686,881 | 1,023,752 | 3,071,256 | 2,002,598 | 65.20% |
+| Qwen3-14B → Qwen3-8B | Qwen3-8B S-Eval Train（E/F） | 4,792,878 | 1,025,330 | 3,075,990 | 1,986,770 | 64.59% |
+| Llama-3.1-8B-Instruct → Qwen3-8B | Llama-3.1-8B-Instruct S-Eval Train（B） | 2,262,223 | **686,963** | 2,060,889 | **1,250,653** | 60.69% |
+| Llama-3.1-8B-Instruct → Qwen3-8B | Qwen3-8B S-Eval Train（E/F） | 4,661,962 | 1,015,354 | 3,046,062 | 1,980,889 | 65.03% |
 
 每 Epoch 的理论抽取上限为 `8100 × 128 = 1,036,800` 对。实际抽取量占上限的比例依次为 **98.74%、98.89%、66.26%、97.93%**；对应平均每条训练样本抽取 **126.39、126.58、84.81、125.35** 对。达不到上限主要是部分样本可选位置不足，尤其抽样还受 prompt/response 配额限制。
 
@@ -176,10 +178,10 @@ E/F 最优 Adapter：**epoch 3，验证 normalized MSE = 0.51734097**。B 的最
 
 | 训练设置 | Prompt／前缀侧抽取 | Response 侧抽取 | Validation 每次评测抽取 | 归一化统计（320 条）抽取 |
 |---|---:|---:|---:|---:|
-| Qwen3-14B / B | 234,631 | 789,121 | 113,781 | 40,282 |
-| Qwen3-14B / E/F | 234,631 | 790,699 | 114,082 | 40,362 |
-| Llama / B | 184,755 | 502,208 | 76,368 | 27,369 |
-| Llama / E/F | 184,755 | 830,599 | 113,081 | 39,974 |
+| Qwen3-14B → Qwen3-8B；Qwen3-14B S-Eval Train（B） | 234,631 | 789,121 | 113,781 | 40,282 |
+| Qwen3-14B → Qwen3-8B；Qwen3-8B S-Eval Train（E/F） | 234,631 | 790,699 | 114,082 | 40,362 |
+| Llama-3.1-8B-Instruct → Qwen3-8B；Llama-3.1-8B-Instruct S-Eval Train（B） | 184,755 | 502,208 | 76,368 | 27,369 |
+| Llama-3.1-8B-Instruct → Qwen3-8B；Qwen3-8B S-Eval Train（E/F） | 184,755 | 830,599 | 113,081 | 39,974 |
 
 > 表中的“Prompt／前缀侧”口径不同：INDEX 包含模板／特殊 token；EXACT 只包含通过边界匹配的内容 token。因此两类方法的总量和构成不能直接视为完全同质的训练信息。
 
@@ -193,8 +195,8 @@ Exact-boundary coverage = 精确匹配的 Qwen 内容 token 位置数 / Qwen 内
 
 | 配对数据（9000 条 Train Response 来源） | Qwen 内容 token 位置 | 精确边界配对位置 | 覆盖率 |
 |---|---:|---:|---:|
-| Llama Train | 2,531,326 | 2,509,603 | **99.14%** |
-| Qwen3-8B Train | 5,220,564 | 5,183,189 | **99.28%** |
+| Llama-3.1-8B-Instruct S-Eval Train | 2,531,326 | 2,509,603 | **99.14%** |
+| Qwen3-8B S-Eval Train | 5,220,564 | 5,183,189 | **99.28%** |
 
 这表示在**当前对齐索引和边界定义下**，大多数 Qwen 内容 token 的结束字符位置都能匹配到 Llama 内容 token 的结束位置；不意味着两模型的 token ID、切分起点或语义单位有 99% 相同，也**尚未验证索引构造在所有样本上的正确性**。后续应抽取真实 token 文本、字符区间及配对索引人工核验。
 
@@ -232,7 +234,7 @@ grep -E '^== |DISTINCT paired positions' token_audit_unique.log
 实验三发现，实验一和实验二不仅使用不同底座模型，也采用不同的训练 token 选择与测试序列映射协议。实验四在 **Qwen3-14B → Qwen3-8B** 这一固定迁移任务上，比较三种协议，检查这些实现选择对冻结围栏的检测性能有多大影响。
 
 - **固定条件**：StreamGuardBench v1 / S-Eval；14B 与 8B 均取 Layer 20（5120D → 4096D）；`torch.nn.Linear(5120, 4096, bias=True)`；归一化 MSE；训练/验证 8100/900，`seed=42`，3 Epoch，AdamW，`lr=3e-4`，权重衰减 0，梯度累积 8，每样本最多 128 对 token；冻结 `checkpoints/qwen3_8b_seval/model_epoch_0.pt`。使用 GPU 0，复用已有 hidden-state 缓存，不重新生成 Response，也不重新训练 Safety Head。
-- **训练数据与测试数据**：B 用 **14B Train** 训练、**14B Test** 评测；E/F 共用用 **8B Train** 训练的 Adapter，E 测 **8B Test**，F 测 **14B Test**。C 在 14B Test 上直接使用真实 8B hidden states，不通过 Adapter，作为一致性基线。
+- **训练数据与测试数据**：B 用 **Qwen3-14B S-Eval Train** 训练、**Qwen3-14B S-Eval Test** 评测；E/F 共用用 **Qwen3-8B S-Eval Train** 训练的 Adapter，E 测 **Qwen3-8B S-Eval Test**，F 测 **Qwen3-14B S-Eval Test**。C 在 Qwen3-14B S-Eval Test 上直接使用真实 8B hidden states，不通过 Adapter，作为一致性基线。
 - **指标**：Response-level F1 取 `pred[-2]`，Streaming F1 取 `max(pred)`（只要任一响应 token 预测为 harmful 即判 harmful）；下表 F1 均针对 harmful（label=1），测试集均为 1000 条，属于**已有完整 Response 上的离线评测**。
 
 | 协议 | Adapter 的训练 token 对 | 测试时输入冻结 8B 围栏的表征 | 与原实验的关系 |
@@ -245,12 +247,12 @@ grep -E '^== |DISTINCT paired positions' token_audit_unique.log
 
 ### 2. P0 / P1 / P2 全部评测结果
 
-| 实验 | P0 Response F1 | P0 Streaming F1 | P1 Response F1 | P1 Streaming F1 | P2 Response F1 | P2 Streaming F1 |
-|---|---:|---:|---:|---:|---:|---:|
-| **B**（14B Train → 14B Test） | 0.8182 | 0.8054 | **0.8931** | **0.8796** | 0.8705 | 0.8757 |
-| **C**（真实 8B 表征，14B Test） | 0.9080 | 0.9007 | 0.9080 | 0.9007 | 0.9080 | 0.9007 |
-| **E**（8B Train → 8B Test） | 0.8247 | 0.8310 | 0.8382 | 0.8338 | **0.8577** | **0.8731** |
-| **F**（8B Train → 14B Test） | 0.8121 | 0.8119 | 0.8133 | 0.7959 | **0.8319** | **0.8481** |
+| 实验（Adapter 训练 Response → 测试 Response） | Safety Head 训练数据 | P0 Response F1 | P0 Streaming F1 | P1 Response F1 | P1 Streaming F1 | P2 Response F1 | P2 Streaming F1 |
+|---|---|---:|---:|---:|---:|---:|---:|
+| **B**（Qwen3-14B S-Eval Train → Qwen3-14B S-Eval Test） | Qwen3-8B S-Eval Train（9000 条） | 0.8182 | 0.8054 | **0.8931** | **0.8796** | 0.8705 | 0.8757 |
+| **C**（不训练 Adapter；使用真实 Qwen3-8B 表征；Qwen3-14B S-Eval Test） | Qwen3-8B S-Eval Train（9000 条） | 0.9080 | 0.9007 | 0.9080 | 0.9007 | 0.9080 | 0.9007 |
+| **E**（Qwen3-8B S-Eval Train → Qwen3-8B S-Eval Test） | Qwen3-8B S-Eval Train（9000 条） | 0.8247 | 0.8310 | 0.8382 | 0.8338 | **0.8577** | **0.8731** |
+| **F**（Qwen3-8B S-Eval Train → Qwen3-14B S-Eval Test） | Qwen3-8B S-Eval Train（9000 条） | 0.8121 | 0.8119 | 0.8133 | 0.7959 | **0.8319** | **0.8481** |
 
 **结果来源**：P0 均抄录自实验一，并非本次重新执行；P1、P2 为实验四实测；C 本次重新执行并得到 Response F1 = `0.9080`、Streaming F1 = `0.9007`，日志显示 `C CONSISTENCY PASSED vs experiment-1 reference`。
 
@@ -263,10 +265,10 @@ grep -E '^== |DISTINCT paired positions' token_audit_unique.log
 | E | +0.28 pp | **+3.93 pp** | +4.21 pp |
 | F | −1.60 pp | **+5.22 pp** | +3.62 pp |
 
-- **B**：P1 比 P0 的 Streaming F1 提高 7.42 pp；P2 略低于 P1。改变训练 token 池后，14B Train 场景的表现明显变化。
+- **B**：P1 比 P0 的 Streaming F1 提高 7.42 pp；P2 略低于 P1。改变训练 token 池后，Qwen3-14B S-Eval Train 场景的表现明显变化。
 - **E**：P1 相对 P0 变化很小，P2 在同一个 Adapter 上比 P1 高 3.93 pp。
 - **F（主要迁移场景）**：P1 的 Streaming F1 为 **0.7959**，低于 P0 的 **0.8119**；保持 P1 Adapter 不变，改为 P2 评测后提高到 **0.8481**（比 P1 高 5.22 pp，比 P0 高 3.62 pp）。与 C 的 **0.9007** 仍相差 **5.26 pp**，相比 P0 与 C 的 **8.88 pp** 差距有所缩小。
-- **C**：本次复核结果与实验一一致，说明同一 14B Test 上的真实 8B 表征诊断基线保持稳定；它不单独证明所有映射索引的合理性。
+- **C**：本次复核结果与实验一一致，说明同一 Qwen3-14B S-Eval Test 上的真实 8B 表征诊断基线保持稳定；它不单独证明所有映射索引的合理性。
 
 ### 3. Tokenizer 与字符映射审计
 
@@ -287,8 +289,8 @@ grep -E '^== |DISTINCT paired positions' token_audit_unique.log
 
 | 评测组 | Test 数据 | 序列位置总数 | P2 相对 P1 改变的来源索引 | 改变比例 | 其中属于精确匹配内容 token 的改变 | 其他位置的改变 |
 |---|---|---:|---:|---:|---:|---:|
-| **B / F** | 14B Test | 628,596 | 11,369 | **1.81%** | 1,369 | 10,000 |
-| **E** | 8B Test | 661,965 | 11,891 | **1.80%** | 1,891 | 10,000 |
+| **B / F** | Qwen3-14B S-Eval Test | 628,596 | 11,369 | **1.81%** | 1,369 | 10,000 |
+| **E** | Qwen3-8B S-Eval Test | 661,965 | 11,891 | **1.80%** | 1,891 | 10,000 |
 
 这里的“改变”严格指 `src_for_qwen[j] != j`，即**选择了不同的源 hidden-state 下标**；它不是数值变化的范数，也不能直接等同于特殊 token 的数量。`non_exact_rewrites` 包含所有不属于精确匹配内容 token 集合的改动，需要区分模板、分隔符、未纳入内容集合的位置等来源。
 
@@ -296,8 +298,8 @@ grep -E '^== |DISTINCT paired positions' token_audit_unique.log
 
 | 评测 Test | 下标增大 `src[j] > j` | 其中 Response 阶段 | 下标减小 `src[j] < j` | Response 阶段全部改变 |
 |---|---:|---:|---:|---:|
-| 14B Test | 7,369 | 1,369 | 4,000 | 5,369 |
-| 8B Test | 7,891 | 1,891 | 4,000 | 5,891 |
+| Qwen3-14B S-Eval Test | 7,369 | 1,369 | 4,000 | 5,369 |
+| Qwen3-8B S-Eval Test | 7,891 | 1,891 | 4,000 | 5,891 |
 
 这些数字仅说明**离线测试时构造的表征序列采用了不同的源位置**；不能仅凭 token 下标大小，就认定训练违规、评测无效或某种性能提升来自信息泄漏。本次研究报告的是完整已知 Response 上的离线 Response/Streaming F1；若将来讨论逐 token 在线部署，需要另外定义并验证在线可用性，不能与本次离线实验混为一谈。
 
@@ -345,3 +347,119 @@ python exp4_qwen14_token_alignment_ablation.py --mode report
 ```
 
 **实验四已完成并记录**；后续若要讨论机制，可单独做特定位置类型的消融，但不作为本次实验四已有结论或必要补跑条件。
+---
+
+## 实验五：Qwen3-8B → Qwen3-14B
+
+### 1. 实验设置与结果
+
+- **迁移**：Source 为 Qwen3-8B（Layer 20，4096D），Target 为 Qwen3-14B（Layer 20，5120D）；冻结 `checkpoints/qwen3_14b_seval/model_epoch_0.pt`，训练 `Linear(4096, 5120, bias=True)` Adapter。
+- **数据**：B 用 Qwen3-8B S-Eval Train 训练 Adapter、Qwen3-8B S-Eval Test 评测；C 在相同 Qwen3-8B S-Eval Test 文本上直接使用真实 14B 表征；E 用 Qwen3-14B S-Eval Train 训练另一个 Adapter、Qwen3-14B S-Eval Test 评测；F 复用 E 的 Adapter，在 Qwen3-8B S-Eval Test 评测。各 Test 均为 1000 条。
+
+| 实验 | Adapter 训练 Response | Safety Head 训练数据 | 测试 Response | 测试表征 → Safety Head | Response F1 | Streaming F1 |
+|---|---|---|---|---|---:|---:|
+| **A** | 无（原生围栏） | Qwen3-8B S-Eval Train（9000 条） | Qwen3-8B S-Eval Test | Qwen3-8B Layer 20 hidden states（4096D） → 冻结的 Qwen3-8B Safety Head | 0.9245 | **0.9228** |
+| **B** | Qwen3-8B S-Eval Train | Qwen3-14B S-Eval Train（9000 条） | Qwen3-8B S-Eval Test | Qwen3-8B Layer 20 hidden states（4096D） → Affine Adapter → 冻结的 Qwen3-14B Safety Head | 0.9031 | **0.8938** |
+| **C** | 无（不使用 Adapter） | Qwen3-14B S-Eval Train（9000 条） | Qwen3-8B S-Eval Test | Qwen3-14B 对同一 Qwen3-8B Response 提取的真实 Layer 20 hidden states（5120D）→ 冻结的 Qwen3-14B Safety Head | 0.9101 | **0.9124** |
+| **D** | 无（原生围栏） | Qwen3-14B S-Eval Train（9000 条） | Qwen3-14B S-Eval Test | Qwen3-14B Layer 20 hidden states（5120D） → 冻结的 Qwen3-14B Safety Head | 0.8955 | **0.8971** |
+| **E** | Qwen3-14B S-Eval Train | Qwen3-14B S-Eval Train（9000 条） | Qwen3-14B S-Eval Test | Qwen3-8B Layer 20 hidden states（4096D） → Affine Adapter → 冻结的 Qwen3-14B Safety Head | 0.8779 | **0.8628** |
+| **F** | Qwen3-14B S-Eval Train（与 E 共用 Adapter） | Qwen3-14B S-Eval Train（9000 条） | Qwen3-8B S-Eval Test | Qwen3-8B Layer 20 hidden states（4096D） → Affine Adapter → 冻结的 Qwen3-14B Safety Head | 0.8997 | **0.8885** |
+
+### 2. 本轮统一协议（实验五～八共用）
+
+以下配置也适用于实验六、七、八，仅 Source、Target、Adapter 维度及冻结的目标围栏不同。
+
+- **训练**：两模型分别对同一条已存储的 *prompt + response* 提取 Layer 20 hidden states；按各自 chat template 定位 prompt、response，仅配对**同一角色中相对字符结束位置完全一致的内容 token**；不使用安全标签训练 Adapter，排除模板／特殊 token 的 MSE 监督。
+- **Adapter 与优化**：`torch.nn.Linear(source_dim, target_dim, bias=True)`；对 Source/Target 表征按训练样本统计的逐特征均值、标准差归一化，以 normalized MSE 训练，送入目标围栏前反归一化。Train 9000 划分为训练 8100／验证 900（`seed=42`），3 Epoch，AdamW（`lr=3e-4`、`weight_decay=0`），梯度累积 8，每样本最多抽 128 对（Prompt 优先最多 32 对，其余从 Response 抽取），用训练子集前 320 条估计归一化统计量；按验证 normalized MSE 最低选择 checkpoint。
+- **评测对齐**：统一以 **Target tokenizer 的 token 网格**及 Target 缓存中的 `assistant_start`、标签为准；Source 内容 token 依据相同文本片段的相对字符结束位置进行索引映射，其他模板／前缀位置按脚本策略回填。B/E/F 使用映射后的 Source 表征经 Adapter 输入**冻结的 Target Safety Head**；C 不经 Adapter，直接使用 Target 真实表征。
+- **指标**：均为 harmful（label=1）类别的 F1；Response-level 使用 `pred[-2]`，Streaming-level 使用 `max(pred)`。属于**完整 Response 已知的离线评测**，没有在这里进行在线时延实验。A、D 原生围栏结果沿用先前复现，不在本轮重训。
+
+### 3. 代码与产物
+
+- **公共代码**：`Kelp/cross_adapter_alignment.py`、`Kelp/cross_adapter_training.py`；四方向串行入口：`Kelp/run_exp5_to_exp8_sequential.sh`（本次运行将可见设备设置为物理 GPU 1）。
+- **本组入口**：`Kelp/exp5_qwen8_to_qwen14.py`；组日志：`logs/exp5_qwen8_to_qwen14.log`。
+- **结果目录**：`checkpoints/cross_adapt_four_directions_v1/qwen8_to_qwen14/`；B 的 Adapter 为 `train_on_src_train/affine_best.pt`，E/F 共用 Adapter 为 `train_on_tgt_train/affine_best.pt`；四组指标与逐样本预测分别为 `metrics_{b,c,e,f}.json`、`predictions_{b,c,e,f}.csv`。
+
+---
+
+## 实验六：Llama-3.1-8B-Instruct → Qwen3-14B
+
+### 1. 实验设置与结果
+
+- **迁移**：Llama-3.1-8B-Instruct（Layer 20，4096D）→ Qwen3-14B（Layer 20，5120D），`Linear(4096, 5120, bias=True)`；冻结 **Qwen3-14B Safety Head**。训练、字符配对和离线评测规则同实验五第 2 节。
+
+| 实验 | Adapter 训练 Response | Safety Head 训练数据 | 测试 Response | 测试表征 → Safety Head | Response F1 | Streaming F1 |
+|---|---|---|---|---|---:|---:|
+| **A** | 无（原生围栏） | Llama-3.1-8B-Instruct S-Eval Train（9000 条） | Llama-3.1-8B-Instruct S-Eval Test | Llama-3.1-8B-Instruct Layer 20 hidden states（4096D） → 冻结的 Llama-3.1-8B-Instruct Safety Head | 0.9095 | **0.9191** |
+| **B** | Llama-3.1-8B-Instruct S-Eval Train | Qwen3-14B S-Eval Train（9000 条） | Llama-3.1-8B-Instruct S-Eval Test | Llama-3.1-8B-Instruct Layer 20 hidden states（4096D） → Affine Adapter → 冻结的 Qwen3-14B Safety Head | 0.9157 | **0.9227** |
+| **C** | 无（不使用 Adapter） | Qwen3-14B S-Eval Train（9000 条） | Llama-3.1-8B-Instruct S-Eval Test | Qwen3-14B 对同一 Llama-3.1-8B-Instruct Response 提取的真实 Layer 20 hidden states（5120D）→ 冻结的 Qwen3-14B Safety Head | 0.8954 | **0.9000** |
+| **D** | 无（原生围栏） | Qwen3-14B S-Eval Train（9000 条） | Qwen3-14B S-Eval Test | Qwen3-14B Layer 20 hidden states（5120D） → 冻结的 Qwen3-14B Safety Head | 0.8955 | **0.8971** |
+| **E** | Qwen3-14B S-Eval Train | Qwen3-14B S-Eval Train（9000 条） | Qwen3-14B S-Eval Test | Llama-3.1-8B-Instruct Layer 20 hidden states（4096D） → Affine Adapter → 冻结的 Qwen3-14B Safety Head | 0.8747 | **0.8576** |
+| **F** | Qwen3-14B S-Eval Train（与 E 共用 Adapter） | Qwen3-14B S-Eval Train（9000 条） | Llama-3.1-8B-Instruct S-Eval Test | Llama-3.1-8B-Instruct Layer 20 hidden states（4096D） → Affine Adapter → 冻结的 Qwen3-14B Safety Head | 0.9081 | **0.9133** |
+
+### 2. 代码与产物
+
+- **入口**：`Kelp/exp6_llama_to_qwen14.py`；组日志：`logs/exp6_llama_to_qwen14.log`。
+- **结果目录**：`checkpoints/cross_adapt_four_directions_v1/llama_to_qwen14/`；B 与 E/F 的 Adapter 分别为 `train_on_src_train/affine_best.pt`、`train_on_tgt_train/affine_best.pt`；四组 `metrics_{b,c,e,f}.json`、`predictions_{b,c,e,f}.csv`。
+- **运行备注**：`prepare-maps` 曾因个别样本的原始 prompt/response 无法按模板原文精确定位而中断；处理该文本定位问题后，串行流程继续并最终完成。具体实现以服务器上实际运行的修复版代码为准。
+
+---
+
+## 实验七：Qwen3-8B → Llama-3.1-8B-Instruct
+
+### 1. 实验设置与结果
+
+- **迁移**：Qwen3-8B（Layer 20，4096D）→ Llama-3.1-8B-Instruct（Layer 20，4096D），`Linear(4096, 4096, bias=True)`；冻结 **Llama-3.1-8B Safety Head**。训练、字符配对和离线评测规则同实验五第 2 节；评测坐标以 **Llama tokenizer** 为准。
+
+| 实验 | Adapter 训练 Response | Safety Head 训练数据 | 测试 Response | 测试表征 → Safety Head | Response F1 | Streaming F1 |
+|---|---|---|---|---|---:|---:|
+| **A** | 无（原生围栏） | Qwen3-8B S-Eval Train（9000 条） | Qwen3-8B S-Eval Test | Qwen3-8B Layer 20 hidden states（4096D） → 冻结的 Qwen3-8B Safety Head | 0.9245 | **0.9228** |
+| **B** | Qwen3-8B S-Eval Train | Llama-3.1-8B-Instruct S-Eval Train（9000 条） | Qwen3-8B S-Eval Test | Qwen3-8B Layer 20 hidden states（4096D） → Affine Adapter → 冻结的 Llama-3.1-8B-Instruct Safety Head | 0.7960 | **0.7470** |
+| **C** | 无（不使用 Adapter） | Llama-3.1-8B-Instruct S-Eval Train（9000 条） | Qwen3-8B S-Eval Test | Llama-3.1-8B-Instruct 对同一 Qwen3-8B Response 提取的真实 Layer 20 hidden states（4096D）→ 冻结的 Llama-3.1-8B-Instruct Safety Head | 0.8507 | **0.8198** |
+| **D** | 无（原生围栏） | Llama-3.1-8B-Instruct S-Eval Train（9000 条） | Llama-3.1-8B-Instruct S-Eval Test | Llama-3.1-8B-Instruct Layer 20 hidden states（4096D） → 冻结的 Llama-3.1-8B-Instruct Safety Head | 0.9095 | **0.9191** |
+| **E** | Llama-3.1-8B-Instruct S-Eval Train | Llama-3.1-8B-Instruct S-Eval Train（9000 条） | Llama-3.1-8B-Instruct S-Eval Test | Qwen3-8B Layer 20 hidden states（4096D） → Affine Adapter → 冻结的 Llama-3.1-8B-Instruct Safety Head | 0.8004 | **0.7706** |
+| **F** | Llama-3.1-8B-Instruct S-Eval Train（与 E 共用 Adapter） | Llama-3.1-8B-Instruct S-Eval Train（9000 条） | Qwen3-8B S-Eval Test | Qwen3-8B Layer 20 hidden states（4096D） → Affine Adapter → 冻结的 Llama-3.1-8B-Instruct Safety Head | 0.7981 | **0.7543** |
+
+### 2. 代码与产物
+
+- **入口**：`Kelp/exp7_qwen8_to_llama.py`；组日志：`logs/exp7_qwen8_to_llama.log`。
+- **结果目录**：`checkpoints/cross_adapt_four_directions_v1/qwen8_to_llama/`；B 与 E/F 的 Adapter 分别为 `train_on_src_train/affine_best.pt`、`train_on_tgt_train/affine_best.pt`；四组 `metrics_{b,c,e,f}.json`、`predictions_{b,c,e,f}.csv`。
+
+---
+
+## 实验八：Qwen3-14B → Llama-3.1-8B-Instruct
+
+### 1. 实验设置与结果
+
+- **迁移**：Qwen3-14B（Layer 20，5120D）→ Llama-3.1-8B-Instruct（Layer 20，4096D），`Linear(5120, 4096, bias=True)`；冻结 **Llama-3.1-8B Safety Head**。训练、字符配对和离线评测规则同实验五第 2 节；评测坐标以 **Llama tokenizer** 为准。
+
+| 实验 | Adapter 训练 Response | Safety Head 训练数据 | 测试 Response | 测试表征 → Safety Head | Response F1 | Streaming F1 |
+|---|---|---|---|---|---:|---:|
+| **A** | 无（原生围栏） | Qwen3-14B S-Eval Train（9000 条） | Qwen3-14B S-Eval Test | Qwen3-14B Layer 20 hidden states（5120D） → 冻结的 Qwen3-14B Safety Head | 0.8955 | **0.8971** |
+| **B** | Qwen3-14B S-Eval Train | Llama-3.1-8B-Instruct S-Eval Train（9000 条） | Qwen3-14B S-Eval Test | Qwen3-14B Layer 20 hidden states（5120D） → Affine Adapter → 冻结的 Llama-3.1-8B-Instruct Safety Head | 0.6812 | **0.6799** |
+| **C** | 无（不使用 Adapter） | Llama-3.1-8B-Instruct S-Eval Train（9000 条） | Qwen3-14B S-Eval Test | Llama-3.1-8B-Instruct 对同一 Qwen3-14B Response 提取的真实 Layer 20 hidden states（4096D）→ 冻结的 Llama-3.1-8B-Instruct Safety Head | 0.8223 | **0.7926** |
+| **D** | 无（原生围栏） | Llama-3.1-8B-Instruct S-Eval Train（9000 条） | Llama-3.1-8B-Instruct S-Eval Test | Llama-3.1-8B-Instruct Layer 20 hidden states（4096D） → 冻结的 Llama-3.1-8B-Instruct Safety Head | 0.9095 | **0.9191** |
+| **E** | Llama-3.1-8B-Instruct S-Eval Train | Llama-3.1-8B-Instruct S-Eval Train（9000 条） | Llama-3.1-8B-Instruct S-Eval Test | Qwen3-14B Layer 20 hidden states（5120D） → Affine Adapter → 冻结的 Llama-3.1-8B-Instruct Safety Head | 0.6261 | **0.6235** |
+| **F** | Llama-3.1-8B-Instruct S-Eval Train（与 E 共用 Adapter） | Llama-3.1-8B-Instruct S-Eval Train（9000 条） | Qwen3-14B S-Eval Test | Qwen3-14B Layer 20 hidden states（5120D） → Affine Adapter → 冻结的 Llama-3.1-8B-Instruct Safety Head | 0.6862 | **0.6799** |
+
+### 2. 代码与产物
+
+- **入口**：`Kelp/exp8_qwen14_to_llama.py`；组日志：`logs/exp8_qwen14_to_llama.log`。
+- **结果目录**：`checkpoints/cross_adapt_four_directions_v1/qwen14_to_llama/`；B 与 E/F 的 Adapter 分别为 `train_on_src_train/affine_best.pt`、`train_on_tgt_train/affine_best.pt`；四组 `metrics_{b,c,e,f}.json`、`predictions_{b,c,e,f}.csv`。
+
+---
+
+## 实验五～八：结果汇总与记录边界
+
+| 迁移方向 | B/C/E/F 使用的冻结 Safety Head 训练数据 | A | B | C | D | E | F | F − C（pp） |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| Qwen3-8B → Qwen3-14B | Qwen3-14B S-Eval Train（9000 条） | 0.9228 | 0.8938 | 0.9124 | 0.8971 | 0.8628 | 0.8885 | −2.39 |
+| Llama-3.1-8B-Instruct → Qwen3-14B | Qwen3-14B S-Eval Train（9000 条） | 0.9191 | 0.9227 | 0.9000 | 0.8971 | 0.8576 | 0.9133 | +1.33 |
+| Qwen3-8B → Llama-3.1-8B-Instruct | Llama-3.1-8B-Instruct S-Eval Train（9000 条） | 0.9228 | 0.7470 | 0.8198 | 0.9191 | 0.7706 | 0.7543 | −6.55 |
+| Qwen3-14B → Llama-3.1-8B-Instruct | Llama-3.1-8B-Instruct S-Eval Train（9000 条） | 0.8971 | 0.6799 | 0.7926 | 0.9191 | 0.6235 | 0.6799 | −11.27 |
+
+**注**：本表均为 Streaming F1。“Safety Head 训练数据”列描述 B、C、E、F；A 使用 Source 模型自身的 S-Eval Train 训练的原生围栏，D 使用 Target 模型自身的 S-Eval Train 训练的原生围栏。A 和 D 取自 `notes/L20/reproduction.md` 的 L20 原生 S-Eval 复现结果，未在实验五～八重跑；B、C、E、F 取自本轮 16 组评测。A 使用 Source 自身 Test，D 使用 Target 自身 Test，不能将它们视为与 B、C、F 完全相同的测试集。
+
+- **统一汇总文件**：`checkpoints/cross_adapt_four_directions_v1/summary_16_results.csv`；总日志：`logs/exp5_to_exp8_master.log`。日志最终标记为 `ALL 16 METRICS READY` 与 `ALL EXPERIMENTS 5/6/7/8 COMPLETE`（2026-11-09 13:23:06，+08:00）。
+- **直接观察**：在各方向各自的 Source Test 上，F 与 C 使用同一个目标围栏，因此可比较表征映射后的结果和真实目标表征结果；本轮 Llama → 14B 的 F 高于 C，而另外三个方向 F 低于 C。**C 不是理论性能上界**。
+- **比较限制**：不同方向的测试 Response 来源、Target Safety Head 及字符网格不同，不能仅凭跨方向 F1 排名确定表征可迁移性的因果原因。本轮没有提供多随机种子或置信区间；不作额外机制归因。
