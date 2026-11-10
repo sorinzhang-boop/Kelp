@@ -80,7 +80,8 @@ class SafetyDataset(Dataset):
             )
 
         os.makedirs(self.cache_dir, exist_ok=True)
-        need_build = (len(glob.glob(os.path.join(self.cache_dir, "sample_*.pt"))) == 0)
+        expected_files = len(load_from_disk(self.dataset_dir))
+        need_build = (len(glob.glob(os.path.join(self.cache_dir, "sample_*.pt"))) != expected_files)
         if need_build and build_cache_if_missing:
             assert tokenizer is not None and base_model is not None, "Building cache requires tokenizer and base_model."
             self._build_cache_per_sample(
@@ -142,7 +143,7 @@ class SafetyDataset(Dataset):
                 # assistant_start = user_to_assistant_pos + len(self.user_prompt_marker)
                 #assistant_ids = tokenizer.encode(self.assistant_tokens)
                 #assistant_start = find_sequence(model_inputs.input_ids[0].tolist(), assistant_ids) + len(assistant_ids)
-                if self.model_name == MODEL_CONFIGS["llama_3_1_8b"]["model_name"]:
+                if self.model_name in (MODEL_CONFIGS["llama_3_1_8b"]["model_name"], MODEL_CONFIGS["internlm3_8b"]["model_name"]):
                     # Llama tokenizer.encode() 默认会添加 BOS，
                     # 因此只在 Llama 路径禁用额外 special tokens。
                     assistant_ids = tokenizer.encode(
@@ -182,7 +183,7 @@ class SafetyDataset(Dataset):
                 #labels[:, -self.num_supervised_token:] = torch.tensor([label], device=self.device).unsqueeze(1).expand(-1, self.num_supervised_token)
                 
                 labels = torch.full((1, seq_len), -100, dtype=torch.long, device=self.device)
-                if self.model_name == MODEL_CONFIGS["llama_3_1_8b"]["model_name"] and seq_len < self.num_supervised_token:
+                if self.model_name in (MODEL_CONFIGS["llama_3_1_8b"]["model_name"], MODEL_CONFIGS["internlm3_8b"]["model_name"]) and seq_len < self.num_supervised_token:
                     effective_n = seq_len
 
                     labels[:, :effective_n] = 0
