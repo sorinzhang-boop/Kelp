@@ -32,11 +32,13 @@ def evaluate_safety_head(
         base_model = AutoModelForCausalLM.from_pretrained(
             model_name,
             torch_dtype="auto",
-            device_map=device
+            device_map=device,
+            trust_remote_code=True,
+            local_files_only=True,
         )
         base_model.to(device=device, dtype=torch.bfloat16 if bf16 else torch.float16 if torch.cuda.is_available() else torch.float32)
         base_model.eval()
-        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True, local_files_only=True)
     else:
         tokenizer = None
         base_model = None

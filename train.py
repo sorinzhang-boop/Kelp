@@ -83,7 +83,9 @@ def train(args):
     base_model = AutoModelForCausalLM.from_pretrained(
         args.model_name,
         torch_dtype="auto",
-        device_map="auto"
+        device_map="auto",
+        trust_remote_code=True,
+        local_files_only=True,
     )
     base_model.eval()
     for p in base_model.parameters():
@@ -105,7 +107,7 @@ def train(args):
 
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=2, pin_memory=True)
 
-    input_dim = AutoConfig.from_pretrained(args.model_name).hidden_size
+    input_dim = AutoConfig.from_pretrained(args.model_name, trust_remote_code=True, local_files_only=True).hidden_size
 
     del base_model
     del tokenizer

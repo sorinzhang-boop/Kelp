@@ -19,6 +19,11 @@ MODEL_CONFIGS = {
         "idx_layer": 20,
         "assistant_tokens": "<|start_header_id|>assistant<|end_header_id|>\n\n",
     },
+    "internlm3_8b": {
+        "model_name": "/data/users/guard_g22/plugguard_repro/models/InternLM3-8B-Instruct",
+        "idx_layer": 24,
+        "assistant_tokens": "<|im_start|>assistant\n",
+    },
 }
 
 
