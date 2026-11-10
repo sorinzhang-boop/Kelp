@@ -632,3 +632,74 @@ weighted avg     0.9116    0.9100    0.9096      1000
 - 训练与评测完成。
 - Checkpoint：`checkpoints/fig3_target_llama_3_1_8b_source_qwen3_14b/model_epoch_0.pt`
 - Log：`logs/fig3_target_llama_3_1_8b_source_qwen3_14b_train.log`
+
+
+---
+
+## Figure 3 Cross-model Transfer：InternLM3-8B
+
+### 实验设置
+
+本轮补齐 Figure 3 中涉及 InternLM3-8B-Instruct 的 7 个 Source–Target 组合。
+
+- GPU：NVIDIA L20（GPU 0）
+- Dataset：StreamGuardBench v1 / S-Eval
+- Train / Test：9000 / 1000（每个模型）
+- Models：Qwen3-8B、Qwen3-14B、Llama-3.1-8B-Instruct、InternLM3-8B-Instruct
+- Hidden Layer：Qwen3 / Llama 为 20，InternLM3 为 24
+- Hidden Size：InternLM3 为 4096
+- Epoch：1；Learning Rate：5e-5；Weight Decay：0
+- Batch Size：1；Gradient Accumulation：32
+- Warmup Ratio：0.05；Max Length：4096
+- Supervised Tokens：10；Seed：42
+
+跨模型实验协议与此前 3×3 复现一致：
+
+- Source Model 决定训练集的 query-response pairs 和风险标签。
+- Target Model 作为冻结的 LLM backbone，分别提取训练集与测试集的 hidden states。
+- 测试集使用 Target Model 对应的 S-Eval testset。
+- 每个组合独立训练 PlugGuard Safety Head，不复用其他组合的 Safety Head。
+
+InternLM3 使用本地模型权重，完成了 `sentencepiece` 依赖安装、Transformers 自定义模型代码兼容处理，以及 assistant marker 适配。正式运行前通过了模型加载、Hidden States、真实样本和 Safety Head 冒烟测试。
+
+### 复现结果
+
+以下 F1 均为 harmful 类（label=1）。论文 Figure 3 仅报告 Streaming F1。
+
+| Source Model | Target Model | Response-level F1（复现） | Streaming F1（复现） | Streaming F1（论文） |
+|---|---|---:|---:|---:|
+| InternLM3-8B | Qwen3-8B | **0.8697** | **0.8722** | 0.8757 |
+| InternLM3-8B | Qwen3-14B | **0.8857** | **0.8777** | 0.8716 |
+| InternLM3-8B | Llama-3.1-8B | **0.4479** | **0.8671** | 0.8764 |
+| InternLM3-8B | InternLM3-8B | **0.8832** | **0.8799** | 0.9026 |
+| Qwen3-8B | InternLM3-8B | **0.8722** | **0.8866** | 0.9072 |
+| Qwen3-14B | InternLM3-8B | **0.8815** | **0.8912** | 0.9086 |
+| Llama-3.1-8B | InternLM3-8B | **0.8575** | **0.8126** | 0.8519 |
+
+### 实验记录
+
+- 7/7 组实验均已完成训练与评估。
+- GPU 0 串行执行，冻结各组 Target LLM，仅训练独立的 PlugGuard Safety Head。
+- Response-level 使用 `pred[-2]`，Streaming-level 使用 `max(pred)`。
+- Checkpoints：`checkpoints/fig3_intern_extension_v1/source_{source}_target_{target}/model_epoch_0.pt`
+- Metrics：`checkpoints/fig3_intern_extension_v1/source_{source}_target_{target}/metrics.json`
+- 完整运行日志：`logs/fig3_intern7_master.log`
+
+上述路径均相对于 `plugguard_repro/` 工作目录。
+
+---
+
+## Figure 3 Cross-model Transfer：复现结果总结
+
+使用 StreamGuardBench v1 / S-Eval，已完成 Figure 3 中四个模型之间的全部 16 个 Source–Target 组合。
+
+下表均为 harmful 类（label=1）的 **Streaming F1**。行表示 Target Model，列表示 Source Model。左侧为本次复现结果，右侧为论文 Figure 3 结果。
+
+| **复现结果（Target \ Source）** | **Qwen3-8B** | **Qwen3-14B** | **Llama-3.1-8B** | **InternLM3-8B** | **论文 Figure 3（Target \ Source）** | **Qwen3-8B** | **Qwen3-14B** | **Llama-3.1-8B** | **InternLM3-8B** |
+|---|---:|---:|---:|---:|---|---:|---:|---:|---:|
+| **Qwen3-8B** | 0.9228 | 0.9175 | 0.8960 | 0.8722 | **Qwen3-8B** | 0.9246 | 0.9161 | 0.8783 | 0.8757 |
+| **Qwen3-14B** | 0.8844 | 0.8971 | 0.8294 | 0.8777 | **Qwen3-14B** | 0.8827 | 0.9041 | 0.8171 | 0.8716 |
+| **Llama-3.1-8B** | 0.8947 | 0.8966 | 0.9191 | 0.8671 | **Llama-3.1-8B** | 0.8966 | 0.9046 | 0.9590 | 0.8764 |
+| **InternLM3-8B** | 0.8866 | 0.8912 | 0.8126 | 0.8799 | **InternLM3-8B** | 0.9072 | 0.9086 | 0.8519 | 0.9026 |
+
+注：复现矩阵由此前完成的 3×3 实验与本轮新增的 7 组 InternLM3 相关实验组成；论文矩阵取自 Figure 3，不包含 Others 列。
