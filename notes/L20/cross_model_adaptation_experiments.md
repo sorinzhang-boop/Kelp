@@ -679,3 +679,679 @@ F1 均针对 harmful（label=1）；E、F 每组各测试 1000 条。**最佳 Ep
 2. **Qwen3-14B → Llama 的预测偏置**：学习率扫描（实验九）未解决 F 的全量 Streaming harmful 触发。实验十在 **E（Llama Test）** 中发现真实 Prompt/Header 可将 Streaming F1 从 `0.6235` 恢复至 `0.9213`；但实验十一在 **F（Qwen3-14B Test）** 中只能从 `0.6799` 提高到 `0.7076`，仍低于 C 的 `0.7926`。**因此实验十的“前缀恢复即可恢复性能”不应推广为 F 组的结论**。
 3. **F 组误报的具体表现**：实验十二～十四表明，T2 在 485 条 benign 中新增 **183 条**误报；新增误报的 harmful token 占比均值 **30.21%**、首次触发位置中位数 **31.58%**，部分样本出现很长的持续 harmful 区间。问题不只在 Streaming 聚合或单一词语，Response 映射与前缀表征之间可能存在非加性交互。
 4. **尚未证实的机制与后续方向**：目前未直接测量映射 hidden states 的误差、余弦相似度或 Safety Head 对不同误差方向的敏感性，**不能将偏置确认为 Affine MSE 失真、Tokenizer 错位或具体敏感词导致**。可优先比较真实与映射 Response 表征的逐 token 误差及其与新增误报的关联；继续使用离线评测口径，混合真实 Llama hidden states 的消融不等于可部署方案。
+
+## 实验十五：InternLM3-8B-Instruct 参与的六方向 Affine Adapter 跨模型迁移
+
+### 1. 实验目的与统一配置
+
+此前实验一、二、五～八已经完成 Qwen3-8B、Qwen3-14B、Llama-3.1-8B-Instruct 三个模型之间的六个有向迁移方向。本次引入 **InternLM3-8B-Instruct**，补齐四模型之间剩余六个有向迁移方向，继续验证：在冻结目标模型 Safety Head 的条件下，能否仅通过 Affine Adapter 将 Source 模型的 hidden states 映射到 Target 表征空间，实现跨模型安全检测。
+
+**六个新增方向：**
+
+| 子实验 | Source Model | Target Model（冻结 Safety Head） | 表征维度 |
+|---|---|---|---|
+| 2.1 | Qwen3-8B | InternLM3-8B-Instruct | 4096D → 4096D |
+| 2.2 | Qwen3-14B | InternLM3-8B-Instruct | 5120D → 4096D |
+| 2.3 | Llama-3.1-8B-Instruct | InternLM3-8B-Instruct | 4096D → 4096D |
+| 2.4 | InternLM3-8B-Instruct | Qwen3-8B | 4096D → 4096D |
+| 2.5 | InternLM3-8B-Instruct | Qwen3-14B | 4096D → 5120D |
+| 2.6 | InternLM3-8B-Instruct | Llama-3.1-8B-Instruct | 4096D → 4096D |
+
+**模型与数据：**
+
+- **模型**：Qwen3-8B、Qwen3-14B、Llama-3.1-8B-Instruct、InternLM3-8B-Instruct。Qwen3 和 Llama 提取 Layer 20，InternLM3 提取 Layer 24。
+- **数据集**：StreamGuardBench v1 / S-Eval，每个模型的 Train 9000 条、Test 1000 条，均使用已经存储的 Prompt-Response-Label 数据，不重新生成 Response。
+- **InternLM3 Test 标签分布**：benign 615 / harmful 385；其他模型的标签分布沿用此前实验记录。
+- **冻结围栏**：每个方向的 B、C、E、F 均使用同一个 Target 模型原生 Safety Head；A、D 使用各自模型的原生围栏结果。
+- **实验环境**：L20 服务器，物理 GPU 1，六方向串行执行。
+
+**统一 Adapter 训练配置：**
+
+| 参数 | 配置 |
+|---|---|
+| Adapter | `torch.nn.Linear(source_dim, target_dim, bias=True)` |
+| 训练目标 | 逐特征归一化 hidden states 的 MSE |
+| 训练/验证划分 | 8100 / 900，`seed=42` |
+| Epoch | 3 |
+| Optimizer | AdamW |
+| Learning Rate | `3e-4` |
+| Weight Decay | 0 |
+| 梯度累积 | 8 |
+| 每样本训练 token | 最多 128 对 |
+| 归一化统计 | 训练子集前 320 条样本 |
+| Checkpoint 选择 | Validation normalized MSE 最低 |
+| 冻结部分 | Source/Target LLM 与 Target Safety Head |
+
+**统一对齐与评测协议：**
+
+1. 对同一条 Prompt + Response 分别提取 Source 和 Target 的指定层 hidden states，按照相同角色内的相对字符结束位置匹配内容 token，构建 Adapter 的 MSE 监督对。
+2. 评测时使用 Target tokenizer 的 token 网格，依据 Source token 的字符结束位置建立索引映射，对非内容 token 按脚本既定策略回填。
+3. InternLM3 使用 SentencePiece 慢速 tokenizer 的兼容字符偏移实现，并在正式运行前通过六方向只读审计；不能将偏移重建等同于两模型 tokenizer 完全一致。
+4. Response-level F1 使用 `pred[-2]`，Streaming F1 使用 `max(pred)`；均针对 harmful（label=1）类别，属于已知完整 Response 的离线评测。
+5. 每个方向分别训练 B 和 E/F 两个 Adapter。E、F 复用同一个 Adapter；C 不经过 Adapter，直接使用 Target 模型在同一 Source Test 上提取的真实 hidden states。
+
+六方向总计新增 **12 次 Adapter 训练、24 组 B/C/E/F 评测**；A/D 引用此前已完成的原生围栏实验结果，不重新训练。
+
+### 2. 六个方向的 A～F 完整结果
+
+#### 2.1 Qwen3-8B → InternLM3-8B-Instruct
+
+**实验设置：**
+
+- **迁移**：Qwen3-8B（Layer 20，4096D）→ InternLM3-8B-Instruct（Layer 24，4096D），训练 `Linear(4096, 4096, bias=True)` Adapter。
+- **冻结围栏**：InternLM3-8B-Instruct 原生 Safety Head，其训练数据为 InternLM3-8B-Instruct S-Eval Train（9000 条）。
+- **B**：使用 Qwen3-8B S-Eval Train 训练 Adapter，在 Qwen3-8B S-Eval Test 上评测。
+- **C**：在相同 Qwen3-8B S-Eval Test 上，直接使用 InternLM3 提取的真实 Layer 24 hidden states，不经过 Adapter。
+- **E/F**：使用 InternLM3-8B-Instruct S-Eval Train 训练另一个 Adapter；E 测试 InternLM3 Test，F 测试 Qwen3-8B Test。
+- **测试集**：Qwen3-8B S-Eval Test 为 benign 467 / harmful 533；InternLM3-8B-Instruct S-Eval Test 为 benign 615 / harmful 385；均为 1000 条。
+
+**A～F 结果总表：**
+
+| 实验 | Adapter 训练 Response | Safety Head 训练数据 | 测试 Response | 测试表征 → Safety Head | Response F1 | Streaming F1 |
+|---|---|---|---|---|---:|---:|
+| **A** | 无（原生围栏） | Qwen3-8B S-Eval Train（9000 条） | Qwen3-8B S-Eval Test | Qwen3-8B Layer 20 真实表征 → 冻结的 Qwen3-8B Safety Head | 0.9245 | **0.9228** |
+| **B** | Qwen3-8B S-Eval Train | InternLM3-8B-Instruct S-Eval Train（9000 条） | Qwen3-8B S-Eval Test | Qwen3-8B Layer 20 → Affine Adapter → 冻结的 InternLM3 Safety Head | 0.8768 | **0.8723** |
+| **C** | 无（不使用 Adapter） | InternLM3-8B-Instruct S-Eval Train（9000 条） | Qwen3-8B S-Eval Test | InternLM3 对同一 Qwen3-8B Response 提取的真实 Layer 24 表征 → 冻结的 InternLM3 Safety Head | 0.8222 | **0.8794** |
+| **D** | 无（原生围栏） | InternLM3-8B-Instruct S-Eval Train（9000 条） | InternLM3-8B-Instruct S-Eval Test | InternLM3 Layer 24 真实表征 → 冻结的 InternLM3 Safety Head | 0.8832 | **0.8799** |
+| **E** | InternLM3-8B-Instruct S-Eval Train | InternLM3-8B-Instruct S-Eval Train（9000 条） | InternLM3-8B-Instruct S-Eval Test | Qwen3-8B Layer 20 → Affine Adapter → 冻结的 InternLM3 Safety Head | 0.8750 | **0.8761** |
+| **F** | InternLM3-8B-Instruct S-Eval Train（与 E 共用 Adapter） | InternLM3-8B-Instruct S-Eval Train（9000 条） | Qwen3-8B S-Eval Test | Qwen3-8B Layer 20 → Affine Adapter → 冻结的 InternLM3 Safety Head | 0.8719 | **0.8749** |
+
+**Adapter 训练结果：**
+
+| Adapter | 训练 Response | 最佳 Epoch | Validation normalized MSE |
+|---|---|---:|---:|
+| B | Qwen3-8B S-Eval Train | **2** | **0.4396554** |
+| E/F 共用 | InternLM3-8B-Instruct S-Eval Train | **3** | **0.4123676** |
+
+两个 Adapter 使用不同来源的训练 Response，不能仅凭其验证 MSE 的高低判断哪种迁移方案更优。
+
+**直接观察：**
+
+1. **F 与 C 的 Streaming F1 接近**：在相同 Qwen3-8B S-Eval Test 上，F 为 `0.8749`，C 为 `0.8794`，F − C = **−0.45 pp**。两组使用相同的冻结 InternLM3 Safety Head，说明在当前测试集上，Affine 映射输入获得了与真实 InternLM3 表征接近的 Streaming-level 检测性能。
+2. **E 与 D 的差距较小**：在相同 InternLM3 S-Eval Test 上，E 的 Streaming F1 为 `0.8761`，D 为 `0.8799`，E − D = **−0.38 pp**。
+3. **B 与 F 的性能接近**：B 的 Streaming F1 为 `0.8723`，F 为 `0.8749`，F − B = **+0.26 pp**。两者使用不同训练 Response 来源，但均在 Qwen3-8B Test 上评测；单次结果不足以确认训练数据来源的因果影响。
+4. **指标差异具有评测层级依赖性**：C 的 Response F1 为 `0.8222`，低于 F 的 `0.8719`；但 C 的 Streaming F1 为 `0.8794`，略高于 F 的 `0.8749`。因此，不能笼统认定真实目标表征在所有评测指标下均优于映射表征。
+5. **实验边界**：当前为固定训练配置与单随机种子的结果，尚未进行多随机种子、置信区间或独立测试集验证。F/C 接近不等于 hidden states 本身已经实现充分的线性对齐。
+
+**代码与产物：**
+
+- **运行代码**：`Kelp/intern_adapter_entry.py`、`Kelp/intern_adapter_runtime.py`、`Kelp/intern_adapter_report.py`、`Kelp/run_intern_adapter_six_gpu1.sh`；复用 `Kelp/cross_adapter_alignment.py` 和 `Kelp/cross_adapter_training.py` 的通用训练与评测逻辑。
+- **结果目录**：`checkpoints/cross_adapt_intern_six_directions_v1/qwen8_to_intern/`。
+- **B Adapter**：`train_on_src_train/affine_best.pt`。
+- **E/F 共用 Adapter**：`train_on_tgt_train/affine_best.pt`。
+- **评测文件**：`metrics_{b,c,e,f}.json`、`predictions_{b,c,e,f}.csv`。
+- **冻结 Target Safety Head**：`checkpoints/fig3_intern_extension_v1/source_intern_target_intern/model_epoch_0.pt`。
+- **统一汇总**：`checkpoints/cross_adapt_intern_six_directions_v1/summary_36_results.csv`。
+- **总日志**：`logs/intern_adapter_six_gpu1.log`；六方向完成标记为 `ALL SIX INTERN TRANSFER DIRECTIONS COMPLETE`（2026-11-11 02:27:26，UTC+8）。
+
+---
+
+#### 2.2 Qwen3-14B → InternLM3-8B-Instruct
+
+**实验设置：**
+
+- **迁移**：Qwen3-14B（Layer 20，5120D）→ InternLM3-8B-Instruct（Layer 24，4096D），训练 `Linear(5120, 4096, bias=True)` Adapter。
+- **冻结围栏**：InternLM3-8B-Instruct 原生 Safety Head，其训练数据为 InternLM3-8B-Instruct S-Eval Train（9000 条）。
+- **B**：使用 Qwen3-14B S-Eval Train 训练 Adapter，在 Qwen3-14B S-Eval Test 上评测。
+- **C**：在相同 Qwen3-14B S-Eval Test 上，直接使用 InternLM3 提取的真实 Layer 24 hidden states，不经过 Adapter。
+- **E/F**：使用 InternLM3-8B-Instruct S-Eval Train 训练另一个 Adapter；E 测试 InternLM3 Test，F 测试 Qwen3-14B Test。
+- **测试集**：Qwen3-14B S-Eval Test 为 benign 485 / harmful 515；InternLM3-8B-Instruct S-Eval Test 为 benign 615 / harmful 385；均为 1000 条。
+- **训练与评测协议**：沿用实验十五第 1 节统一配置，包括角色内相对字符结束位置对齐、normalized MSE、3 Epoch、`lr=3e-4`、Target tokenizer 网格及离线 Response/Streaming F1 口径。
+
+**A～F 结果总表：**
+
+| 实验 | Adapter 训练 Response | Safety Head 训练数据 | 测试 Response | 测试表征 → Safety Head | Response F1 | Streaming F1 |
+|---|---|---|---|---|---:|---:|
+| **A** | 无（原生围栏） | Qwen3-14B S-Eval Train（9000 条） | Qwen3-14B S-Eval Test | Qwen3-14B Layer 20 真实表征 → 冻结的 Qwen3-14B Safety Head | 0.8955 | **0.8971** |
+| **B** | Qwen3-14B S-Eval Train | InternLM3-8B-Instruct S-Eval Train（9000 条） | Qwen3-14B S-Eval Test | Qwen3-14B Layer 20 → Affine Adapter → 冻结的 InternLM3 Safety Head | 0.8621 | **0.8577** |
+| **C** | 无（不使用 Adapter） | InternLM3-8B-Instruct S-Eval Train（9000 条） | Qwen3-14B S-Eval Test | InternLM3 对同一 Qwen3-14B Response 提取的真实 Layer 24 表征 → 冻结的 InternLM3 Safety Head | 0.8169 | **0.8764** |
+| **D** | 无（原生围栏） | InternLM3-8B-Instruct S-Eval Train（9000 条） | InternLM3-8B-Instruct S-Eval Test | InternLM3 Layer 24 真实表征 → 冻结的 InternLM3 Safety Head | 0.8832 | **0.8799** |
+| **E** | InternLM3-8B-Instruct S-Eval Train | InternLM3-8B-Instruct S-Eval Train（9000 条） | InternLM3-8B-Instruct S-Eval Test | Qwen3-14B Layer 20 → Affine Adapter → 冻结的 InternLM3 Safety Head | 0.8668 | **0.8796** |
+| **F** | InternLM3-8B-Instruct S-Eval Train（与 E 共用 Adapter） | InternLM3-8B-Instruct S-Eval Train（9000 条） | Qwen3-14B S-Eval Test | Qwen3-14B Layer 20 → Affine Adapter → 冻结的 InternLM3 Safety Head | 0.8595 | **0.8604** |
+
+**Adapter 训练结果：**
+
+| Adapter | 训练 Response | 最佳 Epoch | Validation normalized MSE |
+|---|---|---:|---:|
+| B | Qwen3-14B S-Eval Train | **3** | **0.4244465** |
+| E/F 共用 | InternLM3-8B-Instruct S-Eval Train | **2** | **0.3932409** |
+
+B 与 E/F 的 Adapter 使用不同来源的训练 Response，验证 MSE 分别为 `0.4244465` 和 `0.3932409`。两者训练与验证样本分布不同，不能仅凭 MSE 数值直接认定 E/F Adapter 的表征映射质量在所有场景下更优。
+
+**直接观察：**
+
+1. **F 低于真实目标表征 C**：在相同 Qwen3-14B S-Eval Test 上，F 的 Streaming F1 为 `0.8604`，C 为 `0.8764`，F − C = **−1.60 pp**。两组使用相同冻结的 InternLM3 Safety Head，说明使用 Affine 映射表征后，Streaming-level 检测性能出现一定下降，但尚未发生此前部分 Llama 目标迁移实验中的严重退化。
+2. **E 与原生 D 的 Streaming F1 基本一致**：在相同 InternLM3 S-Eval Test 上，E 为 `0.8796`，D 为 `0.8799`，E − D = **−0.03 pp**。但两者的 Response F1 分别为 `0.8668` 和 `0.8832`，相差 **−1.64 pp**，说明 Streaming 与 Response 两种评测口径下的差距不同。
+3. **B 与 F 接近**：B 和 F 的 Streaming F1 分别为 `0.8577`、`0.8604`，F − B = **+0.27 pp**。B 使用 Qwen3-14B Train 训练 Adapter，F 使用 InternLM3 Train 训练的 E/F 共用 Adapter；两者在相同 Qwen3-14B Test 上评测，当前差距较小。
+4. **Response 与 Streaming 排名不完全一致**：C 的 Response F1 为 `0.8169`，低于 F 的 `0.8595`（F − C = **+4.26 pp**）；但 Streaming F1 中 C 高于 F。这说明不能仅根据 Streaming F1 推断 Adapter 在 Response-level 决策下也具有相同的性能关系。
+5. **与第 2.1 方向的初步比较**：Qwen3-8B → InternLM3 的 F − C 为 **−0.45 pp**，本组 Qwen3-14B → InternLM3 为 **−1.60 pp**。两组均使用冻结的 InternLM3 Safety Head，但 Source Test 不同，不能仅由该差距断言 Qwen3-14B 的表征比 Qwen3-8B 更难线性对齐。
+6. **实验边界**：当前仍为固定训练超参数、单随机种子的离线评测；没有多随机种子、置信区间或针对表征误差的直接分析，尚不能对 Streaming F1 的差异给出确定的机制解释。
+
+**代码与产物：**
+
+- **运行代码**：`Kelp/intern_adapter_entry.py`、`Kelp/intern_adapter_runtime.py`、`Kelp/intern_adapter_report.py`、`Kelp/run_intern_adapter_six_gpu1.sh`；复用 `Kelp/cross_adapter_alignment.py` 和 `Kelp/cross_adapter_training.py` 的通用训练与评测逻辑。
+- **结果目录**：`checkpoints/cross_adapt_intern_six_directions_v1/qwen14_to_intern/`。
+- **B Adapter**：`train_on_src_train/affine_best.pt`。
+- **E/F 共用 Adapter**：`train_on_tgt_train/affine_best.pt`。
+- **评测文件**：`metrics_{b,c,e,f}.json`、`predictions_{b,c,e,f}.csv`。
+- **冻结 Target Safety Head**：`checkpoints/fig3_intern_extension_v1/source_intern_target_intern/model_epoch_0.pt`。
+- **统一汇总**：`checkpoints/cross_adapt_intern_six_directions_v1/summary_36_results.csv`。
+- **总日志**：`logs/intern_adapter_six_gpu1.log`；六方向完成标记为 `ALL SIX INTERN TRANSFER DIRECTIONS COMPLETE`（2026-11-11 02:27:26，UTC+8）。
+
+---
+
+#### 2.3 Llama-3.1-8B-Instruct → InternLM3-8B-Instruct
+
+**实验设置：**
+
+- **迁移**：Llama-3.1-8B-Instruct（Layer 20，4096D）→ InternLM3-8B-Instruct（Layer 24，4096D），训练 `Linear(4096, 4096, bias=True)` Adapter。
+- **冻结围栏**：InternLM3-8B-Instruct 原生 Safety Head，其训练数据为 InternLM3-8B-Instruct S-Eval Train（9000 条）。
+- **B**：使用 Llama-3.1-8B-Instruct S-Eval Train 训练 Adapter，在 Llama-3.1-8B-Instruct S-Eval Test 上评测。
+- **C**：在相同 Llama-3.1-8B-Instruct S-Eval Test 上，直接使用 InternLM3 提取的真实 Layer 24 hidden states，不经过 Adapter。
+- **E/F**：使用 InternLM3-8B-Instruct S-Eval Train 训练另一个 Adapter；E 测试 InternLM3 Test，F 测试 Llama Test。
+- **测试集**：Llama-3.1-8B-Instruct S-Eval Test 为 benign 547 / harmful 453；InternLM3-8B-Instruct S-Eval Test 为 benign 615 / harmful 385；均为 1000 条。
+- **训练与评测协议**：沿用实验十五第 1 节统一配置，包括角色内相对字符结束位置对齐、normalized MSE、3 Epoch、`lr=3e-4`、Target tokenizer 网格及离线 Response/Streaming F1 口径。
+
+**A～F 结果总表：**
+
+| 实验 | Adapter 训练 Response | Safety Head 训练数据 | 测试 Response | 测试表征 → Safety Head | Response F1 | Streaming F1 |
+|---|---|---|---|---|---:|---:|
+| **A** | 无（原生围栏） | Llama-3.1-8B-Instruct S-Eval Train（9000 条） | Llama-3.1-8B-Instruct S-Eval Test | Llama-3.1-8B-Instruct Layer 20 真实表征 → 冻结的 Llama-3.1-8B-Instruct Safety Head | 0.9095 | **0.9191** |
+| **B** | Llama-3.1-8B-Instruct S-Eval Train | InternLM3-8B-Instruct S-Eval Train（9000 条） | Llama-3.1-8B-Instruct S-Eval Test | Llama-3.1-8B-Instruct Layer 20 → Affine Adapter → 冻结的 InternLM3 Safety Head | 0.8746 | **0.8892** |
+| **C** | 无（不使用 Adapter） | InternLM3-8B-Instruct S-Eval Train（9000 条） | Llama-3.1-8B-Instruct S-Eval Test | InternLM3 对同一 Llama-3.1-8B-Instruct Response 提取的真实 Layer 24 表征 → 冻结的 InternLM3 Safety Head | 0.8208 | **0.8860** |
+| **D** | 无（原生围栏） | InternLM3-8B-Instruct S-Eval Train（9000 条） | InternLM3-8B-Instruct S-Eval Test | InternLM3 Layer 24 真实表征 → 冻结的 InternLM3 Safety Head | 0.8832 | **0.8799** |
+| **E** | InternLM3-8B-Instruct S-Eval Train | InternLM3-8B-Instruct S-Eval Train（9000 条） | InternLM3-8B-Instruct S-Eval Test | Llama-3.1-8B-Instruct Layer 20 → Affine Adapter → 冻结的 InternLM3 Safety Head | 0.8649 | **0.8743** |
+| **F** | InternLM3-8B-Instruct S-Eval Train（与 E 共用 Adapter） | InternLM3-8B-Instruct S-Eval Train（9000 条） | Llama-3.1-8B-Instruct S-Eval Test | Llama-3.1-8B-Instruct Layer 20 → Affine Adapter → 冻结的 InternLM3 Safety Head | 0.8705 | **0.8815** |
+
+**Adapter 训练结果：**
+
+| Adapter | 训练 Response | 最佳 Epoch | Validation normalized MSE |
+|---|---|---:|---:|
+| B | Llama-3.1-8B-Instruct S-Eval Train | **3** | **0.5172540** |
+| E/F 共用 | InternLM3-8B-Instruct S-Eval Train | **3** | **0.4810338** |
+
+两个 Adapter 均在 Epoch 3 获得最低验证 MSE。B 的验证 MSE 为 `0.5172540`，E/F 共用 Adapter 为 `0.4810338`。由于训练 Response 来源不同，不能仅根据两者 MSE 的高低判断跨模型检测性能。
+
+**直接观察：**
+
+1. **F 与真实目标表征 C 接近**：在相同 Llama-3.1-8B-Instruct S-Eval Test 上，F 的 Streaming F1 为 `0.8815`，C 为 `0.8860`，F − C = **−0.45 pp**。两者使用相同的冻结 InternLM3 Safety Head，说明当前 Affine 映射方案在 Streaming-level 检测指标上获得了与真实目标表征接近的性能。
+2. **B 略高于 C**：B 的 Streaming F1 为 `0.8892`，C 为 `0.8860`，B − C = **+0.32 pp**。B 在 Llama Train 上训练 Adapter，C 不使用 Adapter。该结果说明真实 Target hidden states 并非 Adapter 输入在下游 F1 上的必然性能上界，但尚无显著性检验，不能确认该差异具有统计意义。
+3. **E 略低于原生 D**：在相同 InternLM3 S-Eval Test 上，E 的 Streaming F1 为 `0.8743`，D 为 `0.8799`，E − D = **−0.56 pp**。Response F1 分别为 `0.8649` 和 `0.8832`，E − D = **−1.83 pp**，两种评测口径的差距不同。
+4. **B 与 F 存在小幅差异**：B 的 Streaming F1 为 `0.8892`，F 为 `0.8815`，F − B = **−0.77 pp**。B 使用 Llama Train 训练 Adapter，F 使用 InternLM3 Train 训练的 E/F 共用 Adapter，二者都在 Llama Test 上评测。这一差异可能受到训练数据来源及映射表征分布影响，但当前实验不能单独区分具体因素。
+5. **Response-level 与 Streaming-level 的性能关系不同**：C 的 Response F1 为 `0.8208`，F 为 `0.8705`（F − C = **+4.97 pp**）；但 Streaming F1 中 F 略低于 C。这与前两组 Qwen → InternLM3 实验中观察到的评测层级差异一致，说明仅比较 Streaming F1 不能全面描述 Adapter 的下游检测行为。
+6. **与前两组初步比较**：Qwen3-8B → InternLM3、Qwen3-14B → InternLM3、Llama-3.1-8B-Instruct → InternLM3 的 F − C 分别为 **−0.45 pp、−1.60 pp、−0.45 pp**。三个方向的 F 均接近 C，但由于 Source Test 不同，不能仅凭这些数值严格排序不同模型的表征对齐难度。
+7. **实验边界**：当前为固定超参数和单随机种子下的离线评测结果，尚未提供多随机种子、置信区间或 hidden-state 相似度分析，因此不能将下游 F1 接近直接等同于表征空间的充分线性对齐。
+
+**代码与产物：**
+
+- **运行代码**：`Kelp/intern_adapter_entry.py`、`Kelp/intern_adapter_runtime.py`、`Kelp/intern_adapter_report.py`、`Kelp/run_intern_adapter_six_gpu1.sh`；复用 `Kelp/cross_adapter_alignment.py` 和 `Kelp/cross_adapter_training.py` 的通用训练与评测逻辑。
+- **结果目录**：`checkpoints/cross_adapt_intern_six_directions_v1/llama_to_intern/`。
+- **B Adapter**：`train_on_src_train/affine_best.pt`。
+- **E/F 共用 Adapter**：`train_on_tgt_train/affine_best.pt`。
+- **评测文件**：`metrics_{b,c,e,f}.json`、`predictions_{b,c,e,f}.csv`。
+- **冻结 Target Safety Head**：`checkpoints/fig3_intern_extension_v1/source_intern_target_intern/model_epoch_0.pt`。
+- **统一汇总**：`checkpoints/cross_adapt_intern_six_directions_v1/summary_36_results.csv`。
+- **总日志**：`logs/intern_adapter_six_gpu1.log`；六方向完成标记为 `ALL SIX INTERN TRANSFER DIRECTIONS COMPLETE`（2026-11-11 02:27:26，UTC+8）。
+
+---
+
+#### 2.4 InternLM3-8B-Instruct → Qwen3-8B
+
+**实验设置：**
+
+- **迁移**：InternLM3-8B-Instruct（Layer 24，4096D）→ Qwen3-8B（Layer 20，4096D），训练 `Linear(4096, 4096, bias=True)` Adapter。
+- **冻结围栏**：Qwen3-8B 原生 Safety Head，其训练数据为 Qwen3-8B S-Eval Train（9000 条）。
+- **B**：使用 InternLM3-8B-Instruct S-Eval Train 训练 Adapter，在 InternLM3-8B-Instruct S-Eval Test 上评测。
+- **C**：在相同 InternLM3-8B-Instruct S-Eval Test 上，直接使用 Qwen3-8B 提取的真实 Layer 20 hidden states，不经过 Adapter。
+- **E/F**：使用 Qwen3-8B S-Eval Train 训练另一个 Adapter；E 测试 Qwen3-8B Test，F 测试 InternLM3 Test。
+- **测试集**：InternLM3-8B-Instruct S-Eval Test 为 benign 615 / harmful 385；Qwen3-8B S-Eval Test 为 benign 467 / harmful 533；均为 1000 条。
+- **训练与评测协议**：沿用实验十五第 1 节统一配置，包括角色内相对字符结束位置对齐、normalized MSE、3 Epoch、`lr=3e-4`、Target tokenizer 网格及离线 Response/Streaming F1 口径。
+
+**A～F 结果总表：**
+
+| 实验 | Adapter 训练 Response | Safety Head 训练数据 | 测试 Response | 测试表征 → Safety Head | Response F1 | Streaming F1 |
+|---|---|---|---|---|---:|---:|
+| **A** | 无（原生围栏） | InternLM3-8B-Instruct S-Eval Train（9000 条） | InternLM3-8B-Instruct S-Eval Test | InternLM3-8B-Instruct Layer 24 真实表征 → 冻结的 InternLM3 Safety Head | 0.8832 | **0.8799** |
+| **B** | InternLM3-8B-Instruct S-Eval Train | Qwen3-8B S-Eval Train（9000 条） | InternLM3-8B-Instruct S-Eval Test | InternLM3-8B-Instruct Layer 24 → Affine Adapter → 冻结的 Qwen3-8B Safety Head | 0.8978 | **0.8897** |
+| **C** | 无（不使用 Adapter） | Qwen3-8B S-Eval Train（9000 条） | InternLM3-8B-Instruct S-Eval Test | Qwen3-8B 对同一 InternLM3 Response 提取的真实 Layer 20 表征 → 冻结的 Qwen3-8B Safety Head | 0.9114 | **0.9102** |
+| **D** | 无（原生围栏） | Qwen3-8B S-Eval Train（9000 条） | Qwen3-8B S-Eval Test | Qwen3-8B Layer 20 真实表征 → 冻结的 Qwen3-8B Safety Head | 0.9245 | **0.9228** |
+| **E** | Qwen3-8B S-Eval Train | Qwen3-8B S-Eval Train（9000 条） | Qwen3-8B S-Eval Test | InternLM3-8B-Instruct Layer 24 → Affine Adapter → 冻结的 Qwen3-8B Safety Head | 0.9061 | **0.9089** |
+| **F** | Qwen3-8B S-Eval Train（与 E 共用 Adapter） | Qwen3-8B S-Eval Train（9000 条） | InternLM3-8B-Instruct S-Eval Test | InternLM3-8B-Instruct Layer 24 → Affine Adapter → 冻结的 Qwen3-8B Safety Head | 0.8821 | **0.8873** |
+
+**Adapter 训练结果：**
+
+| Adapter | 训练 Response | 最佳 Epoch | Validation normalized MSE |
+|---|---|---:|---:|
+| B | InternLM3-8B-Instruct S-Eval Train | **2** | **0.4181618** |
+| E/F 共用 | Qwen3-8B S-Eval Train | **3** | **0.4541193** |
+
+B 在 Epoch 2 获得最低验证 MSE，E/F 共用 Adapter 在 Epoch 3 获得最低验证 MSE。B 的验证 MSE 为 `0.4181618`，E/F 为 `0.4541193`。由于训练 Response 来源不同，不能仅根据验证 MSE 判断哪个 Adapter 在下游安全检测任务中表现更优。
+
+**直接观察：**
+
+1. **F 低于真实目标表征 C**：在相同 InternLM3-8B-Instruct S-Eval Test 上，F 的 Streaming F1 为 `0.8873`，C 为 `0.9102`，F − C = **−2.29 pp**。两组使用相同的冻结 Qwen3-8B Safety Head，说明在当前测试集上，Affine 映射输入对应的 Streaming-level 检测性能低于真实 Qwen3-8B 表征输入。
+2. **E 低于原生 D，但差距相对有限**：在相同 Qwen3-8B S-Eval Test 上，E 的 Streaming F1 为 `0.9089`，D 为 `0.9228`，E − D = **−1.39 pp**。Response F1 分别为 `0.9061` 和 `0.9245`，相差 **−1.84 pp**。
+3. **B 与 F 接近**：B 的 Streaming F1 为 `0.8897`，F 为 `0.8873`，F − B = **−0.24 pp**。B 使用 InternLM3 Train 训练 Adapter，F 使用 Qwen3-8B Train 训练的 E/F 共用 Adapter，两者均在 InternLM3 Test 上评测。当前差距较小，但尚无统计显著性检验。
+4. **本组 Response 与 Streaming 的 F/C 排名一致**：C 的 Response F1 为 `0.9114`，F 为 `0.8821`，F − C = **−2.93 pp**；Streaming F1 中 F − C 为 **−2.29 pp**。因此，在本组实验的两个评测指标下，真实 Qwen3-8B 表征输入均优于 E/F 共用 Adapter 的映射输入。
+5. **B 的性能高于 Source 原生 A，但不能直接认定迁移改善了围栏**：B 的 Streaming F1 为 `0.8897`，A 为 `0.8799`，B − A = **+0.98 pp**。两者使用相同 InternLM3 Test，但 Safety Head 不同：A 使用原生 InternLM3 围栏，B 使用冻结 Qwen3-8B 围栏及 Affine Adapter。因此，该差异不能单独归因于 Adapter 的作用。
+6. **与前三个 InternLM3 目标方向的比较**：Qwen3-8B → InternLM3、Qwen3-14B → InternLM3、Llama-3.1-8B-Instruct → InternLM3 的 F − C 分别为 **−0.45 pp、−1.60 pp、−0.45 pp**；本组 InternLM3 → Qwen3-8B 为 **−2.29 pp**。本组采用不同的 Target Safety Head 和测试数据，尚不能据此断言迁移方向反转会必然增加表征对齐难度。
+7. **实验边界**：本组为固定超参数、单随机种子下的离线评测。当前没有直接测量 Affine 映射 hidden states 与真实 Qwen3-8B hidden states 的误差分布，也没有多随机种子或置信区间，因此不能进一步确定 F/C 差距的具体机制。
+
+**代码与产物：**
+
+- **运行代码**：`Kelp/intern_adapter_entry.py`、`Kelp/intern_adapter_runtime.py`、`Kelp/intern_adapter_report.py`、`Kelp/run_intern_adapter_six_gpu1.sh`；复用 `Kelp/cross_adapter_alignment.py` 和 `Kelp/cross_adapter_training.py` 的通用训练与评测逻辑。
+- **结果目录**：`checkpoints/cross_adapt_intern_six_directions_v1/intern_to_qwen8/`。
+- **B Adapter**：`train_on_src_train/affine_best.pt`。
+- **E/F 共用 Adapter**：`train_on_tgt_train/affine_best.pt`。
+- **评测文件**：`metrics_{b,c,e,f}.json`、`predictions_{b,c,e,f}.csv`。
+- **冻结 Target Safety Head**：`checkpoints/qwen3_8b_seval/model_epoch_0.pt`。
+- **统一汇总**：`checkpoints/cross_adapt_intern_six_directions_v1/summary_36_results.csv`。
+- **总日志**：`logs/intern_adapter_six_gpu1.log`；六方向完成标记为 `ALL SIX INTERN TRANSFER DIRECTIONS COMPLETE`（2026-11-11 02:27:26，UTC+8）。
+
+---
+
+#### 2.5 InternLM3-8B-Instruct → Qwen3-14B
+
+**实验设置：**
+
+- **迁移**：InternLM3-8B-Instruct（Layer 24，4096D）→ Qwen3-14B（Layer 20，5120D），训练 `Linear(4096, 5120, bias=True)` Adapter。
+- **冻结围栏**：Qwen3-14B 原生 Safety Head，其训练数据为 Qwen3-14B S-Eval Train（9000 条）。
+- **B**：使用 InternLM3-8B-Instruct S-Eval Train 训练 Adapter，在 InternLM3-8B-Instruct S-Eval Test 上评测。
+- **C**：在相同 InternLM3-8B-Instruct S-Eval Test 上，直接使用 Qwen3-14B 提取的真实 Layer 20 hidden states，不经过 Adapter。
+- **E/F**：使用 Qwen3-14B S-Eval Train 训练另一个 Adapter；E 测试 Qwen3-14B Test，F 测试 InternLM3 Test。
+- **测试集**：InternLM3-8B-Instruct S-Eval Test 为 benign 615 / harmful 385；Qwen3-14B S-Eval Test 为 benign 485 / harmful 515；均为 1000 条。
+- **训练与评测协议**：沿用实验十五第 1 节统一配置，包括角色内相对字符结束位置对齐、normalized MSE、3 Epoch、`lr=3e-4`、Target tokenizer 网格及离线 Response/Streaming F1 口径。
+
+**A～F 结果总表：**
+
+| 实验 | Adapter 训练 Response | Safety Head 训练数据 | 测试 Response | 测试表征 → Safety Head | Response F1 | Streaming F1 |
+|---|---|---|---|---|---:|---:|
+| **A** | 无（原生围栏） | InternLM3-8B-Instruct S-Eval Train（9000 条） | InternLM3-8B-Instruct S-Eval Test | InternLM3-8B-Instruct Layer 24 真实表征 → 冻结的 InternLM3 Safety Head | 0.8832 | **0.8799** |
+| **B** | InternLM3-8B-Instruct S-Eval Train | Qwen3-14B S-Eval Train（9000 条） | InternLM3-8B-Instruct S-Eval Test | InternLM3-8B-Instruct Layer 24 → Affine Adapter → 冻结的 Qwen3-14B Safety Head | 0.8816 | **0.8728** |
+| **C** | 无（不使用 Adapter） | Qwen3-14B S-Eval Train（9000 条） | InternLM3-8B-Instruct S-Eval Test | Qwen3-14B 对同一 InternLM3 Response 提取的真实 Layer 20 表征 → 冻结的 Qwen3-14B Safety Head | 0.9019 | **0.8997** |
+| **D** | 无（原生围栏） | Qwen3-14B S-Eval Train（9000 条） | Qwen3-14B S-Eval Test | Qwen3-14B Layer 20 真实表征 → 冻结的 Qwen3-14B Safety Head | 0.8955 | **0.8971** |
+| **E** | Qwen3-14B S-Eval Train | Qwen3-14B S-Eval Train（9000 条） | Qwen3-14B S-Eval Test | InternLM3-8B-Instruct Layer 24 → Affine Adapter → 冻结的 Qwen3-14B Safety Head | 0.8849 | **0.8623** |
+| **F** | Qwen3-14B S-Eval Train（与 E 共用 Adapter） | Qwen3-14B S-Eval Train（9000 条） | InternLM3-8B-Instruct S-Eval Test | InternLM3-8B-Instruct Layer 24 → Affine Adapter → 冻结的 Qwen3-14B Safety Head | 0.8803 | **0.8684** |
+
+**Adapter 训练结果：**
+
+| Adapter | 训练 Response | 最佳 Epoch | Validation normalized MSE |
+|---|---|---:|---:|
+| B | InternLM3-8B-Instruct S-Eval Train | **2** | **0.4457270** |
+| E/F 共用 | Qwen3-14B S-Eval Train | **2** | **0.4750830** |
+
+两个 Adapter 均在 Epoch 2 获得最低验证 MSE。B 的验证 MSE 为 `0.4457270`，E/F 共用 Adapter 为 `0.4750830`。由于两者使用不同来源的训练 Response，不能直接根据验证 MSE 高低判断其跨模型检测性能。
+
+**直接观察：**
+
+1. **F 明显低于真实目标表征 C**：在相同 InternLM3-8B-Instruct S-Eval Test 上，F 的 Streaming F1 为 `0.8684`，C 为 `0.8997`，F − C = **−3.13 pp**。两组使用相同冻结的 Qwen3-14B Safety Head。Response F1 分别为 `0.8803` 和 `0.9019`，F − C = **−2.16 pp**。说明在当前测试集上，Affine 映射输入在两种评测口径下均低于真实 Qwen3-14B 表征输入。
+2. **E 与原生 D 存在一定差距**：在相同 Qwen3-14B S-Eval Test 上，E 的 Streaming F1 为 `0.8623`，D 为 `0.8971`，E − D = **−3.48 pp**。Response F1 分别为 `0.8849` 和 `0.8955`，相差 **−1.06 pp**。Streaming 指标的下降幅度大于 Response 指标，说明两种判定规则对当前映射输入的反应不同；尚未统计逐 token 触发及 FP/FN 分布，不能直接确定差距由何种错误类型造成。
+3. **B 与 F 的性能接近**：B 的 Streaming F1 为 `0.8728`，F 为 `0.8684`，F − B = **−0.44 pp**。B 使用 InternLM3 Train 训练 Adapter，F 使用 Qwen3-14B Train 训练的 E/F 共用 Adapter，两者均在 InternLM3 Test 上评测。由于训练 Response 来源不同，不能仅凭这一差异判断某个训练来源普遍更优。
+4. **C 高于 Source 原生 A，但不能据此认定 Target 模型普遍更优**：C 的 Streaming F1 为 `0.8997`，A 为 `0.8799`，C − A = **+1.98 pp**。两组测试相同 InternLM3 Response，但 A 使用 InternLM3 原生表征和 Safety Head，C 使用真实 Qwen3-14B 表征及其原生 Safety Head；模型与围栏同时发生变化，因此该差异不能归因于单独一个因素。
+5. **与前四个方向的初步比较**：Qwen3-8B → InternLM3、Qwen3-14B → InternLM3、Llama-3.1-8B-Instruct → InternLM3、InternLM3 → Qwen3-8B 的 F − C 分别为 **−0.45 pp、−1.60 pp、−0.45 pp、−2.29 pp**；本组 InternLM3 → Qwen3-14B 为 **−3.13 pp**。本组在目前五个方向中具有更大的 F/C Streaming F1 差距，但五组的 Source Test、Target Safety Head 及表征维度不完全相同，不能据此直接认定 4096D → 5120D 的映射更困难。
+6. **实验边界**：当前为固定超参数、单随机种子下的离线评测。尚未进行混淆矩阵、逐 token 触发、hidden-state 映射误差或多随机种子分析，因此不能确定当前差距是否与特定类别误报、表征失真或其他因素有关。
+
+**代码与产物：**
+
+- **运行代码**：`Kelp/intern_adapter_entry.py`、`Kelp/intern_adapter_runtime.py`、`Kelp/intern_adapter_report.py`、`Kelp/run_intern_adapter_six_gpu1.sh`；复用 `Kelp/cross_adapter_alignment.py` 和 `Kelp/cross_adapter_training.py` 的通用训练与评测逻辑。
+- **结果目录**：`checkpoints/cross_adapt_intern_six_directions_v1/intern_to_qwen14/`。
+- **B Adapter**：`train_on_src_train/affine_best.pt`。
+- **E/F 共用 Adapter**：`train_on_tgt_train/affine_best.pt`。
+- **评测文件**：`metrics_{b,c,e,f}.json`、`predictions_{b,c,e,f}.csv`。
+- **冻结 Target Safety Head**：`checkpoints/qwen3_14b_seval/model_epoch_0.pt`。
+- **统一汇总**：`checkpoints/cross_adapt_intern_six_directions_v1/summary_36_results.csv`。
+- **总日志**：`logs/intern_adapter_six_gpu1.log`；六方向完成标记为 `ALL SIX INTERN TRANSFER DIRECTIONS COMPLETE`（2026-11-11 02:27:26，UTC+8）。
+
+---
+
+#### 2.6 InternLM3-8B-Instruct → Llama-3.1-8B-Instruct
+
+**实验设置：**
+
+- **迁移**：InternLM3-8B-Instruct（Layer 24，4096D）→ Llama-3.1-8B-Instruct（Layer 20，4096D），训练 `Linear(4096, 4096, bias=True)` Adapter。
+- **冻结围栏**：Llama-3.1-8B-Instruct 原生 Safety Head，其训练数据为 Llama-3.1-8B-Instruct S-Eval Train（9000 条）。
+- **B**：使用 InternLM3-8B-Instruct S-Eval Train 训练 Adapter，在 InternLM3-8B-Instruct S-Eval Test 上评测。
+- **C**：在相同 InternLM3-8B-Instruct S-Eval Test 上，直接使用 Llama-3.1-8B-Instruct 提取的真实 Layer 20 hidden states，不经过 Adapter。
+- **E/F**：使用 Llama-3.1-8B-Instruct S-Eval Train 训练另一个 Adapter；E 测试 Llama Test，F 测试 InternLM3 Test。
+- **测试集**：InternLM3-8B-Instruct S-Eval Test 为 benign 615 / harmful 385；Llama-3.1-8B-Instruct S-Eval Test 为 benign 547 / harmful 453；均为 1000 条。
+- **训练与评测协议**：沿用实验十五第 1 节统一配置，包括角色内相对字符结束位置对齐、normalized MSE、3 Epoch、`lr=3e-4`、Target tokenizer 网格及离线 Response/Streaming F1 口径。
+
+**A～F 结果总表：**
+
+| 实验 | Adapter 训练 Response | Safety Head 训练数据 | 测试 Response | 测试表征 → Safety Head | Response F1 | Streaming F1 |
+|---|---|---|---|---|---:|---:|
+| **A** | 无（原生围栏） | InternLM3-8B-Instruct S-Eval Train（9000 条） | InternLM3-8B-Instruct S-Eval Test | InternLM3-8B-Instruct Layer 24 真实表征 → 冻结的 InternLM3 Safety Head | 0.8832 | **0.8799** |
+| **B** | InternLM3-8B-Instruct S-Eval Train | Llama-3.1-8B-Instruct S-Eval Train（9000 条） | InternLM3-8B-Instruct S-Eval Test | InternLM3-8B-Instruct Layer 24 → Affine Adapter → 冻结的 Llama Safety Head | 0.7785 | **0.7593** |
+| **C** | 无（不使用 Adapter） | Llama-3.1-8B-Instruct S-Eval Train（9000 条） | InternLM3-8B-Instruct S-Eval Test | Llama 对同一 InternLM3 Response 提取的真实 Layer 20 表征 → 冻结的 Llama Safety Head | 0.8361 | **0.8130** |
+| **D** | 无（原生围栏） | Llama-3.1-8B-Instruct S-Eval Train（9000 条） | Llama-3.1-8B-Instruct S-Eval Test | Llama-3.1-8B-Instruct Layer 20 真实表征 → 冻结的 Llama Safety Head | 0.9095 | **0.9191** |
+| **E** | Llama-3.1-8B-Instruct S-Eval Train | Llama-3.1-8B-Instruct S-Eval Train（9000 条） | Llama-3.1-8B-Instruct S-Eval Test | InternLM3-8B-Instruct Layer 24 → Affine Adapter → 冻结的 Llama Safety Head | 0.8538 | **0.8302** |
+| **F** | Llama-3.1-8B-Instruct S-Eval Train（与 E 共用 Adapter） | Llama-3.1-8B-Instruct S-Eval Train（9000 条） | InternLM3-8B-Instruct S-Eval Test | InternLM3-8B-Instruct Layer 24 → Affine Adapter → 冻结的 Llama Safety Head | 0.7520 | **0.7203** |
+
+**Adapter 训练结果：**
+
+| Adapter | 训练 Response | 最佳 Epoch | Validation normalized MSE |
+|---|---|---:|---:|
+| B | InternLM3-8B-Instruct S-Eval Train | **2** | **0.4827274** |
+| E/F 共用 | Llama-3.1-8B-Instruct S-Eval Train | **3** | **0.5125773** |
+
+B 在 Epoch 2 获得最低验证 MSE，E/F 共用 Adapter 在 Epoch 3 获得最低验证 MSE。B 的验证 MSE 为 `0.4827274`，E/F 为 `0.5125773`。由于两者的训练及验证 Response 来源不同，不能直接根据验证 MSE 判断哪个 Adapter 的跨模型检测能力更强。
+
+**直接观察：**
+
+1. **F 明显低于真实目标表征 C**：在相同 InternLM3-8B-Instruct S-Eval Test 上，F 的 Streaming F1 为 `0.7203`，C 为 `0.8130`，F − C = **−9.27 pp**。Response F1 分别为 `0.7520` 和 `0.8361`，F − C = **−8.41 pp**。在相同冻结 Llama Safety Head 下，映射表征输入的两种检测指标均明显低于真实 Llama 表征输入。
+
+2. **E 相对原生 D 也出现明显下降**：在相同 Llama-3.1-8B-Instruct S-Eval Test 上，E 的 Streaming F1 为 `0.8302`，D 为 `0.9191`，E − D = **−8.89 pp**。Response F1 分别为 `0.8538` 和 `0.9095`，E − D = **−5.57 pp**。这说明性能下降并不只出现在 F 的 InternLM3 Test 上，在 E 的 Llama Test 上同样存在。但两组测试数据不同，不能直接将 E/F 的差异归因于某一单独因素。
+
+3. **B 高于 F，但两者均低于 C**：B 的 Streaming F1 为 `0.7593`，F 为 `0.7203`，F − B = **−3.90 pp**；B − C = **−5.37 pp**。B 和 F 均在 InternLM3 Test 上评测，使用相同冻结 Llama Safety Head，但 B 的 Adapter 在 InternLM3 Train 上训练，F 的 Adapter 在 Llama Train 上训练。当前结果表明 B 的下游检测指标较高，但不能仅凭单次实验确认该差异由训练数据来源造成。
+
+4. **Response 与 Streaming 均呈现相同的主要性能关系**：本组 InternLM3 Test 上，C、B、F 的 Response F1 分别为 `0.8361`、`0.7785`、`0.7520`；Streaming F1 分别为 `0.8130`、`0.7593`、`0.7203`。两个指标下均满足 C > B > F。因此，本组性能退化并非只体现在 Streaming 聚合规则上，但尚未进一步分析逐 token 预测分布及混淆矩阵。
+
+5. **与此前 Llama 目标迁移实验的联系**：实验七～十四已发现 Qwen3-8B、Qwen3-14B 迁移至冻结 Llama Safety Head 时可能出现明显性能下降，并针对部分方向分析了 Prompt/Header 与 Response 表征的影响。本次 InternLM3 → Llama 方向同样出现较大的 F/C 差距，说明 Llama 作为 Target 时的迁移退化现象在新增 Source 模型上再次出现。不过，本组尚未执行与实验十～十四相同的表征替换、逐 token 触发和误报分析，不能直接认定两者由相同机制导致。
+
+6. **六个新增方向中的相对位置**：目前六个方向的 F − C Streaming F1 差距依次为：
+   - Qwen3-8B → InternLM3：**−0.45 pp**
+   - Qwen3-14B → InternLM3：**−1.60 pp**
+   - Llama-3.1-8B-Instruct → InternLM3：**−0.45 pp**
+   - InternLM3 → Qwen3-8B：**−2.29 pp**
+   - InternLM3 → Qwen3-14B：**−3.13 pp**
+   - InternLM3 → Llama-3.1-8B-Instruct：**−9.27 pp**
+
+   本组具有六个方向中最大的 F/C Streaming F1 下降幅度。但不同方向的 Source Test、Target Safety Head 与模型组合不完全相同，不能据此直接认定其 hidden states 的线性映射误差一定最大。
+
+7. **实验边界与后续方向**：本组使用固定训练超参数和单随机种子，尚未进行多随机种子评测、置信区间分析或 hidden-state 映射误差测量。下一步可优先比较 C、B、F 的 Streaming TP/FP/FN/TN、逐 token harmful 预测占比以及 Prompt/Header 与 Response 表征替换结果，判断是否存在与实验十～十四相似的误报偏置。当前只能确认下游检测性能下降，尚不能将其归因于 Affine MSE、Tokenizer 对齐、Prompt 前缀或特定 token 的影响。
+
+**代码与产物：**
+
+- **运行代码**：`Kelp/intern_adapter_entry.py`、`Kelp/intern_adapter_runtime.py`、`Kelp/intern_adapter_report.py`、`Kelp/run_intern_adapter_six_gpu1.sh`；复用 `Kelp/cross_adapter_alignment.py` 和 `Kelp/cross_adapter_training.py` 的通用训练与评测逻辑。
+- **结果目录**：`checkpoints/cross_adapt_intern_six_directions_v1/intern_to_llama/`。
+- **B Adapter**：`train_on_src_train/affine_best.pt`。
+- **E/F 共用 Adapter**：`train_on_tgt_train/affine_best.pt`。
+- **评测文件**：`metrics_{b,c,e,f}.json`、`predictions_{b,c,e,f}.csv`。
+- **冻结 Target Safety Head**：`checkpoints/llama_3_1_8b_seval/model_epoch_0.pt`。
+- **统一汇总**：`checkpoints/cross_adapt_intern_six_directions_v1/summary_36_results.csv`。
+- **总日志**：`logs/intern_adapter_six_gpu1.log`；六方向完成标记为 `ALL SIX INTERN TRANSFER DIRECTIONS COMPLETE`（2026-11-11 02:27:26，UTC+8）。
+
+---
+
+### 3. Adapter 训练与表征对齐
+
+#### 3.1 六个方向的 Adapter 训练结果汇总
+
+六个迁移方向各训练两个独立的 Affine Adapter：
+
+- **B Adapter**：使用 Source 模型的 S-Eval Train 数据，在同一文本上提取 Source 和 Target hidden states，训练 Source → Target 的 Affine 映射，并在 Source Test 上评测。
+- **E/F Adapter**：使用 Target 模型的 S-Eval Train 数据训练另一个 Source → Target Affine 映射。E 在 Target Test 上评测，F 在 Source Test 上评测，**E/F 共用同一 Adapter checkpoint**。
+- 两种 Adapter 均不更新底座 LLM 和 Target Safety Head，仅优化 Affine 映射参数。
+- 每个 Adapter 最多训练 3 Epoch，按 Validation normalized MSE 选择最优 checkpoint。
+
+**12 个 Adapter 的完整训练结果：**
+
+| 迁移方向 | Adapter | 训练 Response 来源 | 最佳 Epoch | Validation normalized MSE |
+|---|---|---|---:|---:|
+| Qwen3-8B → InternLM3 | B | Qwen3-8B Train | 2 | 0.4396554 |
+| Qwen3-8B → InternLM3 | E/F | InternLM3 Train | 3 | 0.4123676 |
+| Qwen3-14B → InternLM3 | B | Qwen3-14B Train | 3 | 0.4244465 |
+| Qwen3-14B → InternLM3 | E/F | InternLM3 Train | 2 | 0.3932409 |
+| Llama-3.1-8B → InternLM3 | B | Llama-3.1-8B Train | 3 | 0.5172540 |
+| Llama-3.1-8B → InternLM3 | E/F | InternLM3 Train | 3 | 0.4810338 |
+| InternLM3 → Qwen3-8B | B | InternLM3 Train | 2 | 0.4181618 |
+| InternLM3 → Qwen3-8B | E/F | Qwen3-8B Train | 3 | 0.4541193 |
+| InternLM3 → Qwen3-14B | B | InternLM3 Train | 2 | 0.4457270 |
+| InternLM3 → Qwen3-14B | E/F | Qwen3-14B Train | 2 | 0.4750830 |
+| InternLM3 → Llama-3.1-8B | B | InternLM3 Train | 2 | 0.4827274 |
+| InternLM3 → Llama-3.1-8B | E/F | Llama-3.1-8B Train | 3 | 0.5125773 |
+
+**直接观察：**
+
+1. 12 个 Adapter 均在既定 3 Epoch 内完成训练，并产生最佳验证 checkpoint。其中 **6 个在 Epoch 2 最优、6 个在 Epoch 3 最优**。
+2. 在 Qwen3-8B、Qwen3-14B、Llama-3.1-8B → InternLM3 三个方向中，E/F Adapter 的验证 MSE 均低于对应 B Adapter；在 InternLM3 → Qwen3-8B、Qwen3-14B、Llama-3.1-8B 三个方向中，E/F Adapter 的验证 MSE 均高于对应 B Adapter。
+3. 上述 MSE 差异是描述性结果。B 和 E/F 的训练及验证 Response 来源不同，而且不同方向的 Source/Target 表征空间也不同，因此**不能直接以跨方向或跨训练来源的 MSE 数值判断表征对齐难度**。
+4. Validation normalized MSE 是 hidden-state 回归误差，Response/Streaming F1 是冻结 Safety Head 的下游分类指标。两者不是同一种评价量，较低的 MSE 不必然对应较高的检测 F1。
+
+#### 3.2 Affine Adapter 结构与优化方式
+
+Adapter 的核心结构为单层带偏置线性映射：
+
+```python
+self.linear = nn.Linear(src_dim, tgt_dim, bias=True)
+```
+
+令 Source hidden state 为 `x`，Target hidden state 为 `y`。训练前根据训练子集估计 Source 和 Target 各特征维度的均值及标准差：
+
+```text
+x_norm = (x - x_mean) / x_std
+y_norm = (y - y_mean) / y_std
+
+y_pred_norm = Linear(x_norm)
+loss = MSE(y_pred_norm, y_norm)
+```
+
+推理评测时，将 Adapter 的预测结果还原到 Target hidden-state 数值尺度：
+
+```text
+y_pred = Linear((x - x_mean) / x_std) * y_std + y_mean
+```
+
+其中 `x_mean`、`x_std`、`y_mean`、`y_std` 作为 Adapter buffer 随 checkpoint 保存，不参与梯度优化。
+
+具体训练实现：
+
+- 使用固定随机种子 `42`，将每个 9000 条 Train 数据集划分为 **8100 条训练、900 条验证**。
+- 对训练集前 320 个随机划分后的训练样本估计归一化统计量。
+- 每条训练样本最多抽取 128 对精确字符结束位置匹配的内容 token；代码优先抽取最多 32 对 Prompt token，剩余配额用于 Response token。若匹配数量不足，不强行补齐。
+- 优化器为 AdamW，学习率 `3e-4`，`weight_decay=0`，梯度累积步数为 `8`。
+- 使用 BF16 autocast，并对 Adapter 线性层参数执行最大范数 `1.0` 的梯度裁剪。
+- 每轮使用独立的确定性样本顺序与 Token 对采样，验证时按 normalized MSE 选择最佳模型。
+- `affine_best.pt` 保存最佳 Adapter 参数、归一化 buffer、Epoch、验证 MSE 和训练配置；`last_epoch.pt` 保存断点续训状态。
+
+**训练边界**：本次 Adapter 训练使用已经缓存的两侧 hidden states，不需要每个 Epoch 重新运行底座 LLM，也不使用 Safety Head 分类损失反向优化 Adapter。底座模型与 Target Safety Head 始终冻结。
+
+#### 3.3 Token 对齐：训练时精确匹配与评测时目标网格映射
+
+不同 LLM 的 tokenizer、chat template 和 special token 不一致。即使输入相同的 Prompt + Response，两侧 hidden-state 序列的长度及 token 边界也可能不同，不能直接按 token index 一一对应。
+
+本次沿用 `relative_char_end_v1` 对齐协议，将 Prompt 和 Response 作为两个独立的字符坐标区域处理。
+
+**（1）训练阶段：精确内容 Token 配对**
+
+1. 对相同 Prompt + Response 分别使用 Source 和 Target tokenizer 还原 token 序列及字符偏移。
+2. 根据 Prompt/Response 的实际文本区域，排除角色头、分隔符等非内容 token。
+3. 对 Prompt 与 Response 分别计算 token 结束位置相对于对应文本起点的字符偏移。
+4. 只有 Source 和 Target 内容 token 在**同一角色文本中具有相同的相对字符结束位置**，才构成训练候选 Token 对。
+5. 从精确匹配候选中抽样，使用 Source/Target hidden states 计算 normalized MSE。
+
+该规则不要求 Source 与 Target token 的字符串或 token ID 相同，也不要求它们的起始边界相同；它只保证候选 token 在同一角色文本内具有相同的字符结束边界。
+
+**（2）评测阶段：Target tokenizer 网格上的 Source 映射**
+
+冻结 Target Safety Head 接收的是 Target hidden-state 维度及序列布局，因此评测时必须构建与 Target tokenizer 对应的输入序列。
+
+- 以 Target tokenizer 的 token 序列长度及 `assistant_start` 为标准，构建 `src_for_target` 索引映射。
+- 对 Target Prompt/Response 内容 token，选取同一文本角色内**字符结束位置不晚于该 Target token 的最近 Source 内容 token**。
+- 对无法直接对应内容 token 的角色标记、特殊 token 及前缀位置，使用脚本预定义的 Source 前缀状态或已有映射状态进行填充。
+- 对选定的 Source hidden states 执行 Affine 映射，再送入冻结 Target Safety Head。
+- C 组直接使用 Target 模型真实 hidden states，不使用 Source 索引映射或 Adapter。
+
+**重要区别**：训练只使用精确字符结束位置匹配的内容 Token 对，而评测需要覆盖整个 Target 网格，因此允许最近已完成内容 token 的回填。两者不是同一种严格程度的对齐协议。
+
+此外，该映射是针对已知完整 Prompt + Response 构造的离线索引对齐，**未建立严格的在线流式因果执行保证**。因此，本次 Streaming F1 指逐 token 判定聚合指标，不代表已经完成实时流式部署验证。
+
+#### 3.4 InternLM3 慢速 Tokenizer 的兼容处理与校验
+
+原始通用对齐代码依赖 Hugging Face fast tokenizer 的 `return_offsets_mapping`。InternLM3-8B-Instruct 使用的 SentencePiece 慢速 tokenizer 不能直接沿用这一接口，因此本轮实验增加了专门的兼容运行层。
+
+兼容处理的核心要求：
+
+1. 从 InternLM3 的 SentencePiece 分词结果重建 token 对应的字符偏移，而不是直接假定跨模型 token index 对齐。
+2. 保持 InternLM3 原有 chat template 和 special token 的 Token ID 序列，避免字符偏移计算改变底座模型实际输入。
+3. 对重建结果进行 Token ID 一致性和缓存长度检查，确保对齐使用的序列能够对应已经缓存的 hidden states。
+4. 训练 Token 对仍遵守 `relative_char_end_v1`，不因 InternLM3 使用慢速 tokenizer 而放宽精确字符结束边界匹配规则。
+
+本轮正式执行前，六个方向均通过前置审计：
+
+```text
+PASS ALL SIX AUDITS (no GPU jobs launched)
+```
+
+随后依次完成跨模型 hidden-state 缓存准备、字符索引映射构建、Smoke Test、Adapter 训练及 B/C/E/F 评测，最终得到：
+
+```text
+ALL SIX DIRECTIONS A-F READY
+ALL SIX INTERN TRANSFER DIRECTIONS COMPLETE
+```
+
+上述校验说明本次实现通过了脚本设置的数据一致性和运行检查，但**不意味着不同 tokenizer 的全部语义边界完全一致，也不意味着对齐后的 hidden states 在表征空间中不存在偏差**。
+
+#### 3.5 Checkpoint 组织及训练复现边界
+
+每个迁移方向分别保存 B 与 E/F 两套 Adapter：
+
+```text
+checkpoints/cross_adapt_intern_six_directions_v1/
+├── qwen8_to_intern/
+├── qwen14_to_intern/
+├── llama_to_intern/
+├── intern_to_qwen8/
+├── intern_to_qwen14/
+└── intern_to_llama/
+```
+
+各方向内部使用相同的 Adapter 目录组织：
+
+```text
+<direction>/
+├── train_on_src_train/
+│   ├── affine_best.pt
+│   ├── last_epoch.pt
+│   └── training_complete.json
+└── train_on_tgt_train/
+    ├── affine_best.pt
+    ├── last_epoch.pt
+    └── training_complete.json
+```
+
+其中：
+
+- `train_on_src_train/affine_best.pt`：供 B 组评测使用。
+- `train_on_tgt_train/affine_best.pt`：供 E、F 两组共用。
+- `last_epoch.pt`：保存最近完成 Epoch 的 Adapter 和优化器状态，供断点续训。
+- `training_complete.json`：记录训练完成标记及主要超参数。
+
+**复现边界**：六个方向沿用同一训练方法和主要超参数，但训练 Response 分布、Source/Target 模型、表征维度及 Token 对齐关系不同。当前记录对应固定随机种子的一次完整运行；尚未通过多随机种子实验量化训练随机性，也没有独立验证集上的超参数搜索。
+
+---
+
+### 4. 六方向结果分析与比较
+
+#### 4.1 Streaming F1 汇总
+
+| 迁移方向 | B | C | E | F | F − C | E − D |
+|---|---:|---:|---:|---:|---:|---:|
+| Qwen3-8B → InternLM3 | 0.8723 | 0.8794 | 0.8761 | 0.8749 | −0.45 pp | −0.38 pp |
+| Qwen3-14B → InternLM3 | 0.8577 | 0.8764 | 0.8796 | 0.8604 | −1.60 pp | −0.03 pp |
+| Llama-3.1-8B → InternLM3 | 0.8892 | 0.8860 | 0.8743 | 0.8815 | −0.45 pp | −0.56 pp |
+| InternLM3 → Qwen3-8B | 0.8897 | 0.9102 | 0.9089 | 0.8873 | −2.29 pp | −1.39 pp |
+| InternLM3 → Qwen3-14B | 0.8728 | 0.8997 | 0.8623 | 0.8684 | −3.13 pp | −3.48 pp |
+| InternLM3 → Llama-3.1-8B | 0.7593 | 0.8130 | 0.8302 | 0.7203 | **−9.27 pp** | **−8.89 pp** |
+
+注：`F − C` 在相同 Source Test、同一冻结 Target Safety Head 下比较映射表征与真实目标表征；`E − D` 在相同 Target Test、同一冻结 Target Safety Head 下比较映射表征与原生目标表征。表中差值单位为百分点（pp）。
+
+#### 4.2 Response F1 与 Streaming F1 的差异
+
+| 迁移方向 | Response F − C | Streaming F − C |
+|---|---:|---:|
+| Qwen3-8B → InternLM3 | +4.97 pp | −0.45 pp |
+| Qwen3-14B → InternLM3 | +4.26 pp | −1.60 pp |
+| Llama-3.1-8B → InternLM3 | +4.97 pp | −0.45 pp |
+| InternLM3 → Qwen3-8B | −2.93 pp | −2.29 pp |
+| InternLM3 → Qwen3-14B | −2.16 pp | −3.13 pp |
+| InternLM3 → Llama-3.1-8B | −8.41 pp | −9.27 pp |
+
+#### 4.3 主要结论
+
+1. **六个方向的 F 组 Streaming F1 均低于 C 组**，差距为 0.45～9.27 pp。
+2. **Target 为 InternLM3 的三个方向**，F − C Streaming F1 分别为 −0.45、−1.60、−0.45 pp；但 Response F1 均高于 C 组，表明两种评测口径下的性能关系不同。
+3. **Source 为 InternLM3 的三个方向**，F − C Streaming F1 分别为 −2.29、−3.13、−9.27 pp；Response F1 也均低于 C 组。
+4. **InternLM3 → Llama-3.1-8B-Instruct 的退化最大**：F − C 为 −9.27 pp，E − D 为 −8.89 pp。该结果与此前 Qwen → Llama 方向出现迁移性能下降的现象一致，但尚不能确认失效机制相同。
+5. **E 组 Streaming F1 在六个方向中均低于 D 组**，其中 Qwen3-14B → InternLM3 的差距最小（−0.03 pp），InternLM3 → Llama 的差距最大（−8.89 pp）。
+
+#### 4.4 结果解释边界
+
+- 不同方向的 Source Test、Target Safety Head 不完全相同，不能直接将 F1 差距解释为模型间表征对齐难度的严格排名。
+- 本次仅完成单随机种子下的离线评测，未进行显著性检验。
+- 尚未统计六方向的逐 Token 预测、混淆矩阵及 hidden-state 映射误差，因此不能确定性能下降的具体原因。
+
+---
+
+### 5. 代码、Checkpoint 与复现记录
+
+#### 5.1 实验代码与运行环境
+
+- **核心训练与评测代码**：`Kelp/cross_adapter_alignment.py`、`Kelp/cross_adapter_training.py`。
+- **InternLM3 扩展代码**：`Kelp/intern_adapter_runtime.py`、`Kelp/intern_adapter_entry.py`、`Kelp/intern_adapter_report.py`。
+- **运行脚本**：`Kelp/run_intern_adapter_six_gpu1.sh`。
+- **硬件**：NVIDIA L20，指定物理 GPU 1（`CUDA_VISIBLE_DEVICES=1`）。
+- **执行方式**：六个迁移方向串行运行，复用已有缓存，不进行 Response 重新生成。
+
+运行命令：
+
+```bash
+cd ~/plugguard_repro/Kelp
+
+# 六方向前置检查
+bash run_intern_adapter_six_gpu1.sh check
+
+# 执行六方向完整实验
+bash run_intern_adapter_six_gpu1.sh full
+```
+
+#### 5.2 Checkpoint 与结果文件
+
+统一结果目录：
+
+```text
+~/plugguard_repro/checkpoints/cross_adapt_intern_six_directions_v1/
+```
+
+六个迁移方向：
+
+| 实验编号 | 迁移方向 | 目录 |
+|---|---|---|
+| 2.1 | Qwen3-8B → InternLM3 | `qwen8_to_intern/` |
+| 2.2 | Qwen3-14B → InternLM3 | `qwen14_to_intern/` |
+| 2.3 | Llama-3.1-8B → InternLM3 | `llama_to_intern/` |
+| 2.4 | InternLM3 → Qwen3-8B | `intern_to_qwen8/` |
+| 2.5 | InternLM3 → Qwen3-14B | `intern_to_qwen14/` |
+| 2.6 | InternLM3 → Llama-3.1-8B | `intern_to_llama/` |
+
+每个方向保存：
+
+- `train_on_src_train/affine_best.pt`：B 组 Adapter。
+- `train_on_tgt_train/affine_best.pt`：E/F 共用 Adapter。
+- `metrics_b.json`、`metrics_c.json`、`metrics_e.json`、`metrics_f.json`：评测指标。
+- `predictions_b.csv`、`predictions_c.csv`、`predictions_e.csv`、`predictions_f.csv`：逐样本预测结果。
+
+**总汇总文件**：
+
+```text
+checkpoints/cross_adapt_intern_six_directions_v1/summary_36_results.csv
+```
+
+共包含六个方向 × A～F 六组，即 **36 条结果**。其中 A/D 为历史原生围栏结果，B/C/E/F 为本轮评测结果。
+
+#### 5.3 实验完成记录
+
+- **总日志**：`logs/intern_adapter_six_gpu1.log`。
+- **完成时间**：2026-11-11 02:27:26（UTC+8）。
+- **完成状态**：
+
+```text
+ALL SIX DIRECTIONS A-F READY
+ALL SIX INTERN TRANSFER DIRECTIONS COMPLETE
+```
+
+本次新增实验完成 **6 个有向迁移方向、12 个 Affine Adapter 训练、24 组 B/C/E/F 离线评测**。
+
+结合此前三个模型之间已经完成的六个有向迁移方向，目前四个模型之间的 **12 个非自身有向迁移方向均已覆盖**。
+
+---
