@@ -1355,3 +1355,66 @@ ALL SIX INTERN TRANSFER DIRECTIONS COMPLETE
 结合此前三个模型之间已经完成的六个有向迁移方向，目前四个模型之间的 **12 个非自身有向迁移方向均已覆盖**。
 
 ---
+
+## 实验十六：Qwen3-8B 与 Qwen3-14B 双向 F 组 Token 对齐协议消融
+
+### 1. 实验目的与配置
+
+比较 Qwen3-8B 与 Qwen3-14B 双向迁移中，不同 Token 对齐协议对 **Streaming F1** 的影响。仅评测 F 组：使用 Target 模型的 S-Eval Train 训练 Adapter，在 Source 模型的 S-Eval Test 上评测，冻结 Target Safety Head。
+
+- **迁移方向**：Qwen3-14B → Qwen3-8B（5120D → 4096D）；Qwen3-8B → Qwen3-14B（4096D → 5120D）。
+- **数据与表征**：StreamGuardBench v1 / S-Eval，两个模型均取 Layer 20；Train 9000 条、Test 1000 条。
+- **Adapter**：`Linear(source_dim, target_dim, bias=True)`，归一化 MSE。
+- **训练参数**：8100/900 训练验证划分、3 Epoch、AdamW、`lr=3e-4`、梯度累积 8、每样本最多 128 对 Token、320 条样本估计归一化统计、`seed=42`；选择 Validation MSE 最低的 Checkpoint。
+- **评测**：Streaming 使用 `max(pred)`，计算 harmful（label=1）F1；复用已有 hidden-state 缓存，物理 GPU 1。
+
+### 2. Token 对齐协议
+
+每个方向分别训练两个独立 Adapter。
+
+| 协议 | 训练 Token 配对 | 测试表征映射 |
+|---|---|---|
+| **P0_INDEX** | Source/Target 按相同 Token 下标配对，包括模板和特殊 Token | Source hidden states 保持原始下标，经 Adapter 输入 Target Safety Head |
+| **P1_CHAR_END** | 仅配对同一角色内字符结束位置精确匹配的正文 Token | 按字符结束位置映射 Source 正文表征；模板位置复用 Source 已有表征 |
+
+**P1 的具体映射规则：**
+
+- 正文位置：选择同角色内字符结束位置不超过当前 Target 位置的最近 Source 正文 Token。
+- Prompt/Assistant 前缀模板位置：使用 Source 相应前缀边界的 hidden state。
+- Response 结尾模板位置：沿用前一个位置已映射的 Source 索引，通常是最后一个正文 Token。
+
+实验四已验证本数据中 Qwen3-8B 与 Qwen3-14B 的 Token ID 一致。这里的 P1_CHAR_END 对应实验四的 **P2 完整协议**，并非只改变测试映射；训练 Token 选择和归一化统计也发生变化。
+
+### 3. Streaming F1 结果
+
+| 迁移方向 | P0_INDEX | P1_CHAR_END | 提升 |
+|---|---:|---:|---:|
+| **14B → 8B** | 0.8100 | **0.8481** | **+3.81 pp** |
+| **8B → 14B** | 0.8786 | **0.8885** | **+0.99 pp** |
+
+**Streaming 混淆矩阵：**
+
+| 方向 | 协议 | TP | FP | FN | TN |
+|---|---|---:|---:|---:|---:|
+| 14B → 8B | P0 | 501 | 221 | 14 | 264 |
+| 14B → 8B | P1 | 444 | 88 | 71 | 397 |
+| 8B → 14B | P0 | 492 | 95 | 41 | 372 |
+| 8B → 14B | P1 | 522 | 120 | 11 | 347 |
+
+**训练结果：** 14B → 8B 的 P0/P1 最佳 Epoch 为 3/2，Validation MSE 为 0.3142118/0.4029590；8B → 14B 为 3/2，Validation MSE 为 0.3174443/0.4466911。
+
+### 4. 结果分析与结论
+
+1. **14B → 8B**：P1 的 Streaming F1 提升 **3.81 pp**，FP 减少 133 条，但 FN 增加 57 条。改善主要来自误报减少。
+2. **8B → 14B**：P1 的 Streaming F1 提升 **0.99 pp**，FN 减少 30 条，但 FP 增加 25 条。改善主要来自有害样本召回提升。
+3. **MSE 与 F1 不一致**：两个方向均出现 P0 验证 MSE 更低、但 P1 Streaming F1 更高的现象，说明表征回归误差不能直接代表下游检测效果。
+
+**结论**：在本次固定训练配置下，完整字符对齐协议在两个 Qwen 双向迁移任务中均提高了 Streaming F1，但改善分别体现为降低误报和提高召回。由于训练和测试协议同时变化，不能将增益单独归因于测试索引映射；结果也尚未经过多随机种子验证。
+
+### 5. 代码与产物
+
+- **脚本**：`Kelp/qwen_bidirectional_f_alignment_ablation.py`、`Kelp/run_qwen_f_alignment_ablation_gpu1.sh`。
+- **Checkpoint/评测目录**：`checkpoints/qwen_f_alignment_ablation_v1/{qwen14_to_qwen8,qwen8_to_qwen14}/{P0_INDEX,P1_CHAR_END}/`。
+- **总结果**：`checkpoints/qwen_f_alignment_ablation_v1/summary_f_4_results.csv`。
+- **日志**：`logs/qwen_f_alignment_ablation_v1.log`。
+- **完成时间**：2026-11-11 22:42:09（UTC+8）。
