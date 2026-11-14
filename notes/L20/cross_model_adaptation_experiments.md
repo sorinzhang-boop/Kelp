@@ -1418,3 +1418,69 @@ ALL SIX INTERN TRANSFER DIRECTIONS COMPLETE
 - **总结果**：`checkpoints/qwen_f_alignment_ablation_v1/summary_f_4_results.csv`。
 - **日志**：`logs/qwen_f_alignment_ablation_v1.log`。
 - **完成时间**：2026-11-11 22:42:09（UTC+8）。
+
+## 实验十七：WildGuard 上 Qwen3-8B 与 Llama-3.1-8B 双向 A/F/G 迁移对照
+
+### 1. 实验目的与配置
+
+验证 S-Eval 中观察到的 **Llama Safety Head 迁移性能下降及方向不对称性**，并引入 PlugGuard Figure 3 的跨模型训练数据迁移（G 组）作为对照。
+
+- **数据集**：StreamGuardBench v1 / WildGuard，Train 37,934 条、Test 1,725 条。
+- **迁移方向**：Qwen3-8B → Llama-3.1-8B-Instruct，以及反向 Llama → Qwen3-8B。
+- **表征与对齐**：Layer 20，hidden size 均为 4096；F 组使用完整字符级 Token 对齐。
+- **F 组 Adapter**：`Linear(4096, 4096, bias=True)`，归一化 MSE，3 Epoch、`lr=3e-4`、`seed=42`，选择验证 MSE 最低的 Checkpoint。
+- **评测**：两个方向分别使用 Source 模型的 WildGuard Test；Streaming 采用任意 Token 触发（`max(pred)`），报告 harmful（label=1）F1。
+- **A/F/G 定义**：
+  - **A**：Source 原生 Safety Head，使用 Source WildGuard Train 训练。
+  - **F**：Source hidden states → Adapter → 冻结的 Target Safety Head；Adapter 使用 Target WildGuard Train 训练。
+  - **G**：使用 Target WildGuard Train 的标注 Response，在 Source hidden states 上重新训练 Source Safety Head，不使用 Adapter。
+
+### 2. Streaming F1 实验结果
+
+**完整 A/F/G 对照：**
+
+| 迁移方向 | 组别 | Precision | Recall | Streaming F1 | 相对 A |
+|---|---|---:|---:|---:|---:|
+| Qwen3-8B → Llama | **A** | 0.7606 | 0.8838 | **0.8176** | — |
+| Qwen3-8B → Llama | **F** | 0.3206 | 0.9789 | **0.4831** | −33.45 pp |
+| Qwen3-8B → Llama | **G** | 0.6948 | 0.8979 | **0.7834** | −3.42 pp |
+| Llama → Qwen3-8B | **A** | 0.6057 | 0.8204 | **0.6969** | — |
+| Llama → Qwen3-8B | **F** | 0.6825 | 0.6990 | **0.6906** | −0.63 pp |
+| Llama → Qwen3-8B | **G** | 0.5070 | 0.8835 | **0.6442** | −5.27 pp |
+
+**Streaming 混淆矩阵：**
+
+| 迁移方向 | 组别 | TP | FP | FN | TN |
+|---|---|---:|---:|---:|---:|
+| Qwen3-8B → Llama | A | 251 | 79 | 33 | 1362 |
+| Qwen3-8B → Llama | F | 278 | 589 | 6 | 852 |
+| Qwen3-8B → Llama | G | 255 | 112 | 29 | 1329 |
+| Llama → Qwen3-8B | A | 169 | 110 | 37 | 1409 |
+| Llama → Qwen3-8B | F | 144 | 67 | 62 | 1452 |
+| Llama → Qwen3-8B | G | 182 | 177 | 24 | 1342 |
+
+注：正向 Test 含 harmful 284 条、benign 1441 条；反向 Test 含 harmful 206 条、benign 1519 条，均为 1725 条。正向 A/G 的混淆矩阵由分类报告的 Precision、Recall 及类别数量反算，其余来自评测 JSON。
+
+**F 组 Adapter 训练结果：**
+
+| 迁移方向 | 最佳 Epoch | Validation Normalized MSE |
+|---|---:|---:|
+| Qwen3-8B → Llama | 1 | 0.5590173 |
+| Llama → Qwen3-8B | 2 | 0.5409519 |
+
+### 3. 结果分析与结论
+
+1. **Qwen3-8B → Llama**：F 组 Streaming F1 仅为 **0.4831**，较 A 下降 **33.45 pp**，较 G 下降 **30.03 pp**。F 组 Recall 高达 0.9789，但 FP 达到 589，主要问题是安全样本大量误报。G 组达到 0.7834，接近原生 A 组。
+2. **Llama → Qwen3-8B**：F 组 Streaming F1 为 **0.6906**，仅比 A 低 **0.63 pp**，并高于 G 组的 0.6442（+4.64 pp），迁移性能基本接近原生水平。
+3. **方向不对称性**：复用 Llama Safety Head 时，F 组明显退化；复用 Qwen3-8B Safety Head 时，F 组接近原生。这与 S-Eval 中观察到的方向性差异一致。
+
+**结论**：WildGuard 双向实验再次验证了围栏迁移性能的明显方向不对称性。当前 Affine Adapter 迁移到 Llama Safety Head 时存在严重误报问题，而反向迁移效果良好。由于两个方向的测试集和类别比例不同，不能直接比较绝对 F1；后续需进一步分析 Llama Safety Head 对映射表征及 Prompt/Header Token 的敏感性。
+
+### 4. 代码与实验产物
+
+- **正向脚本**：`wildguard_qwen8_to_llama_f.py`、`run_wildguard_qwen8_to_llama_gpu1.sh`。
+- **反向脚本**：`wildguard_llama_to_qwen8_afg.py`、`run_wildguard_llama_to_qwen8_gpu1.sh`。
+- **正向结果**：`checkpoints/wildguard_qwen8_to_llama_f_v1/`；G 组围栏：`checkpoints/wildguard_qwen8_to_llama_g_v1/`。
+- **反向结果**：`checkpoints/wildguard_llama_to_qwen8_{f,g}_v1/`。
+- **日志**：`logs/wildguard_qwen8_to_llama_all_gpu1.log`、`logs/wildguard_qwen8_to_llama_g_gpu1.log`、`logs/wildguard_llama_to_qwen8_all_gpu1.log`。
+- **完成时间**：2026-11-14（UTC+8）。
