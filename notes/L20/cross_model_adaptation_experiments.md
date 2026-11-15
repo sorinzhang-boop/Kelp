@@ -1484,3 +1484,49 @@ ALL SIX INTERN TRANSFER DIRECTIONS COMPLETE
 - **反向结果**：`checkpoints/wildguard_llama_to_qwen8_{f,g}_v1/`。
 - **日志**：`logs/wildguard_qwen8_to_llama_all_gpu1.log`、`logs/wildguard_qwen8_to_llama_g_gpu1.log`、`logs/wildguard_llama_to_qwen8_all_gpu1.log`。
 - **完成时间**：2026-11-14（UTC+8）。
+
+## 阶段性总结：S-Eval 四模型 A/F/G 跨模型迁移对比
+
+### 1. 实验定义
+
+统一以 **Source → Target** 表示迁移方向：Source 是需要部署安全围栏的模型，Target 是已有 Safety Head 的模型。
+
+- **A 组（Source 原生围栏）**：使用 Source S-Eval Train 训练 Source Safety Head，在 Source S-Eval Test 上评测，不使用 Adapter。
+- **F 组（Affine Adapter 迁移）**：使用 Target S-Eval Train 训练的原生 Target Safety Head 并冻结；使用 Target S-Eval Train 的 Response 训练 Source → Target Affine Adapter，在 Source S-Eval Test 上评测。测试时 Source hidden states 经 Adapter 映射后输入 Target Safety Head。
+- **G 组（Figure 3 重新训练围栏）**：使用 Target S-Eval Train 的 Response 和标签，基于 Source 模型提取的 hidden states **重新训练独立的 Source Safety Head**，在 Source S-Eval Test 上评测，不使用 Adapter。
+
+**G 组对应论文 Figure 3 的反向迁移记录。** 例如，本实验的 Qwen3-14B → Qwen3-8B 对应 Figure 3 原定义的 Qwen3-8B → Qwen3-14B。
+
+因此，A、F、G 三组均在同一 Source S-Eval Test 上评测，但 Safety Head 的训练数据与表征处理方式不同。
+
+### 2. A/F/G Streaming F1 结果总表
+
+数据集：StreamGuardBench v1 / S-Eval。每个方向测试 1000 条 Response。F1 均针对 harmful（label=1）类别，差值单位为百分点（pp）。
+
+| 迁移方向（Source → Target） | A | F | G | F − A (pp) | F − G (pp) |
+|---|---:|---:|---:|---:|---:|
+| Qwen3-8B → Qwen3-14B | 0.9228 | 0.8885 | 0.9175 | −3.43 | −2.90 |
+| Qwen3-8B → Llama-3.1-8B | 0.9228 | 0.7543 | 0.8960 | −16.85 | −14.17 |
+| Qwen3-8B → InternLM3-8B | 0.9228 | 0.8749 | 0.8722 | −4.79 | +0.27 |
+| Qwen3-14B → Qwen3-8B | 0.8971 | 0.8481 | 0.8844 | −4.90 | −3.63 |
+| Qwen3-14B → Llama-3.1-8B | 0.8971 | 0.6799 | 0.8294 | −21.72 | −14.95 |
+| Qwen3-14B → InternLM3-8B | 0.8971 | 0.8604 | 0.8777 | −3.67 | −1.73 |
+| Llama-3.1-8B → Qwen3-8B | 0.9191 | 0.9199 | 0.8947 | +0.08 | +2.52 |
+| Llama-3.1-8B → Qwen3-14B | 0.9191 | 0.9133 | 0.8966 | −0.58 | +1.67 |
+| Llama-3.1-8B → InternLM3-8B | 0.9191 | 0.8815 | 0.8671 | −3.76 | +1.44 |
+| InternLM3-8B → Qwen3-8B | 0.8799 | 0.8873 | 0.8866 | +0.74 | +0.07 |
+| InternLM3-8B → Qwen3-14B | 0.8799 | 0.8684 | 0.8912 | −1.15 | −2.28 |
+| InternLM3-8B → Llama-3.1-8B | 0.8799 | 0.7203 | 0.8126 | −15.96 | −9.23 |
+
+**结果来源：**
+
+- A/F：`cross_model_adaptation_experiments.md` 中的实验二、四、五～八、十五。
+- G：`reproduction.md` 中复现的 Figure 3 结果，按照本实验方向反向对应，并非论文原始 F1 数值。
+- Qwen3-14B → Qwen3-8B 的 F 组使用实验四 P2 字符对齐协议结果 `0.8481`，而非实验一原始 INDEX 协议结果 `0.8119`。
+
+### 3. 阶段性结论
+
+1. **整体表现**：12 个方向中，F 组有 2 个方向优于 A 组、5 个方向优于 G 组，说明 Affine Adapter 在部分方向上能够取得接近或超过对照方案的检测性能，但存在明显方向差异。
+2. **迁移到 Llama 的性能退化最明显**：Qwen3-8B、Qwen3-14B、InternLM3 → Llama 的 F − G 分别为 −14.17、−14.95、−9.23 pp，说明冻结 Llama Safety Head 的复用效果较差。
+3. **Llama 作为 Source 时表现较好**：Llama → Qwen3-8B、Qwen3-14B、InternLM3 的 F 组分别为 `0.9199`、`0.9133`、`0.8815`，且均高于对应 G 组。
+4. **结论边界**：A/F/G 使用相同 Source Test，但 Safety Head 训练方式及表征空间不同。F − G 能比较两种迁移方案的最终检测效果，不能将差异全部归因于 Adapter 映射质量。当前结果属于固定配置、单随机种子的离线评测。
